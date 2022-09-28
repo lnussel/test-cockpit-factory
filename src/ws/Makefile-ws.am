@@ -1,0 +1,472 @@
+
+COCKPIT_BUILD_INFO = "Built on $(shell date)"
+
+LOGIN_PO_FILES = $(patsubst %,dist/static/login.po.%.html,$(LINGUAS))
+
+staticdir = $(datadir)/cockpit/static
+nodist_static_DATA = dist/static/login.min.html dist/static/login.po.html $(LOGIN_PO_FILES)
+
+dist/static/login.js: src/ws/login.js
+	$(ESHINT_RULE)
+	$(COPY_RULE)
+dist/static/login.min.js: dist/static/login.js
+	$(MIN_JS_RULE)
+dist/static/login.css: src/ws/login.css
+	$(COPY_RULE)
+dist/static/login.min.css: dist/static/login.css
+	$(MIN_CSS_RULE)
+dist/static/login.html: src/ws/login.html dist/static/login.js dist/static/login.css
+	$(AM_V_GEN) $(MKDIR_P) $(dir $@) && \
+	sed -e '/<script>/ r dist/static/login.js' \
+	    -e '/<style>/ r dist/static/login.css' $< > $@.tmp && \
+	$(MV) $@.tmp $@
+dist/static/login.min.html: src/ws/login.html dist/static/login.min.js dist/static/login.min.css
+	$(AM_V_GEN) $(MKDIR_P) $(dir $@) && \
+	sed -e '/<script>/ r dist/static/login.min.js' \
+	    -e '/<style>/ r dist/static/login.min.css' $< > $@.tmp && \
+	$(MV) $@.tmp $@
+
+dist/static/login.po.html: src/ws/po.empty.html
+	$(COPY_RULE)
+
+dist/static/login.po.%.html: src/ws/%.po src/ws/po.empty.html
+	$(AM_V_GEN) $(MKDIR_P) $(dir $@) && \
+	$(srcdir)/tools/missing $(srcdir)/po/po2json -m $(srcdir)/src/ws/po.empty.html -o $@.tmp src/ws/$*.po && \
+	$(MV) $@.tmp $@
+
+staticfontsdir = $(staticdir)/fonts
+staticfonts_DATA = $(OPENSANS_FONTS) $(REDHATTEXT_FONTS) $(REDHATDISPLAY_FONTS)
+
+MAINTAINERCLEANFILES += \
+	dist/static/login.html \
+	dist/static/login.min.html \
+	dist/static/login.js \
+	dist/static/login.min.js \
+	dist/static/login.css \
+	dist/static/login.min.css \
+	$(NULL)
+
+EXTRA_DIST += \
+	dist/static/login.html \
+	dist/static/login.min.html \
+	dist/static/login.js \
+	dist/static/login.min.js \
+	dist/static/login.css \
+	dist/static/login.min.css \
+	src/ws/login.html \
+	src/ws/login.js \
+	src/ws/login.css \
+	src/ws/po.empty.html \
+	$(LOGIN_PO_FILES) \
+	$(staticfonts_DATA) \
+	$(NULL)
+
+# ----------------------------------------------------------------------------------------------------
+
+noinst_LIBRARIES += libcockpit-ws.a
+
+libcockpit_ws_a_SOURCES = \
+	src/ws/cockpitws.h \
+	src/ws/cockpithandlers.h \
+	src/ws/cockpithandlers.c \
+	src/ws/cockpitauth.h \
+	src/ws/cockpitauth.c \
+	src/ws/cockpitcertificate.c \
+	src/ws/cockpitcertificate.h \
+	src/ws/cockpitcompat.c \
+	src/ws/cockpitcompat.h \
+	src/ws/cockpitbranding.h \
+	src/ws/cockpitbranding.c \
+	src/ws/cockpitchannelresponse.h \
+	src/ws/cockpitchannelresponse.c \
+	src/ws/cockpitchannelsocket.h \
+	src/ws/cockpitchannelsocket.c \
+	src/ws/cockpitcreds.h src/ws/cockpitcreds.c \
+	src/ws/cockpitwebservice.h \
+	src/ws/cockpitwebservice.c \
+	src/ws/cockpitwsinstancecert.h \
+	src/ws/cockpitwsinstancecert.c \
+	$(NULL)
+
+libcockpit_ws_a_CFLAGS = \
+	-I$(top_srcdir)/src/ws \
+	-DCOCKPIT_BUILD_INFO=\"$(COCKPIT_BUILD_INFO)\"	\
+	-DG_LOG_DOMAIN=\"cockpit-ws\" \
+	$(COCKPIT_WS_CFLAGS) \
+	$(NULL)
+
+libcockpit_ws_LIBS = \
+	libcockpit-ws.a \
+	libcockpit-common.a \
+	libcockpit-common-nodeps.a \
+	libwebsocket.a \
+	$(COCKPIT_WS_LIBS) \
+	$(NULL)
+
+EXTRA_DIST += \
+	src/ws/mock-combined.crt \
+	src/ws/mock-ecc.crt \
+	src/ws/mock-ecc.key \
+	src/ws/mock-cat-with-init \
+	src/ws/mock-kdc \
+	src/ws/mock-krb5.conf.in \
+	src/ws/mock-kdc.conf.in \
+	src/ws/mock-static \
+	src/ws/mock-config \
+	src/ws/mock-pipes/exit127 \
+	src/ws/mock-pipes/someprogram \
+	src/ws/mock-pipes/cockpit-session \
+	$(NULL)
+
+# ----------------------------------------------------------------------------------------------------
+
+sbin_PROGRAMS += remotectl
+
+libexec_PROGRAMS += cockpit-ws cockpit-session
+
+cockpit_session_SOURCES = \
+	src/ws/session-utils.c \
+	src/ws/session-utils.h \
+	src/ws/session.c \
+	$(NULL)
+cockpit_session_LDADD = \
+	libcockpit-common-nodeps.a \
+	$(COCKPIT_SESSION_LIBS) \
+	$(NULL)
+
+cockpit_ws_SOURCES =					\
+	src/ws/main.c					\
+	$(NULL)
+
+cockpit_ws_CFLAGS = 					\
+	-DG_LOG_DOMAIN=\"cockpit-ws\"			\
+	-I$(top_srcdir)/src/ws				\
+	$(COCKPIT_WS_CFLAGS)				\
+	$(NULL)
+
+cockpit_ws_LDADD = 					\
+	$(libcockpit_ws_LIBS) \
+	$(COCKPIT_WS_LIBS)					\
+	$(NULL)
+
+remotectl_SOURCES = \
+	src/ws/cockpitcertificate.c \
+	src/ws/cockpitcertificate.h \
+	src/ws/remotectl-certificate.c \
+	src/ws/remotectl.c \
+	src/ws/remotectl.h \
+	$(NULL)
+
+remotectl_CFLAGS = \
+	$(COCKPIT_CFLAGS) \
+	$(NULL)
+
+remotectl_LDADD = \
+	libcockpit-common.a \
+	libcockpit-common-nodeps.a \
+	$(COCKPIT_LIBS) \
+	$(NULL)
+
+systemd_units_in = \
+	src/ws/cockpit-motd.service.in \
+	src/ws/cockpit.service.in \
+	src/ws/cockpit.socket.in \
+	src/ws/cockpit-wsinstance-http.service.in \
+	src/ws/cockpit-wsinstance-http.socket.in \
+	src/ws/cockpit-wsinstance-http-redirect.service.in \
+	src/ws/cockpit-wsinstance-http-redirect.socket.in \
+	src/ws/cockpit-wsinstance-https-factory@.service.in \
+	src/ws/cockpit-wsinstance-https-factory.socket.in \
+	src/ws/cockpit-wsinstance-https@.service.in \
+	src/ws/cockpit-wsinstance-https@.socket.in \
+	$(NULL)
+
+nodist_systemdunit_DATA += $(patsubst %.in,%,$(systemd_units_in))
+dist_systemdunit_DATA += src/ws/system-cockpithttps.slice
+
+firewalldir = $(prefix)/lib/firewalld/services
+firewall_DATA = src/ws/cockpit.xml
+
+motddir = $(datadir)/$(PACKAGE)/motd/
+dist_motd_DATA = src/ws/inactive.motd
+dist_motd_SCRIPTS = src/ws/update-motd
+
+# Automake: 'Variables using ... ‘sysconf’ ... are installed by install-exec.'
+install-exec-hook::
+	$(MKDIR_P) $(DESTDIR)$(sysconfdir)/motd.d
+	$(LN_S) -nf /run/cockpit/motd $(DESTDIR)$(sysconfdir)/motd.d/cockpit
+	$(MKDIR_P) $(DESTDIR)$(sysconfdir)/issue.d
+	$(LN_S) -nf /run/cockpit/motd $(DESTDIR)$(sysconfdir)/issue.d/cockpit.issue
+
+tempconfdir = $(prefix)/lib/tmpfiles.d
+nodist_tempconf_DATA = src/ws/cockpit-tempfiles.conf
+tempconf_in = src/ws/cockpit-tempfiles.conf.in
+
+$(nodist_tempconf_DATA): $(tempconf_in)
+	$(SUBST_RULE)
+
+# If running cockpit-ws as a non-standard user, we also set up
+# cockpit-session to be setuid root, but only runnable by cockpit-session
+install-exec-hook::
+	chown -f root:$(COCKPIT_WSINSTANCE_GROUP) $(DESTDIR)$(libexecdir)/cockpit-session || true
+	test "$(COCKPIT_USER)" != "root" && chmod -f 4750 $(DESTDIR)$(libexecdir)/cockpit-session || true
+
+noinst_PROGRAMS += pam_cockpit_cert.so
+pam_cockpit_cert_so_SOURCES = \
+	src/ws/cockpitwsinstancecert.c \
+	src/ws/pam_cockpit_cert.c
+pam_cockpit_cert.so$(EXEEXT): $(pam_cockpit_cert_so_SOURCES)
+	$(AM_V_CCLD) $(CC) -fPIC -shared $(PAM_COCKPIT_CERT_CFLAGS) $(CFLAGS) $(DEFS) -I$(builddir) -o $@ $^ $(LDFLAGS) $(PAM_COCKPIT_CERT_LIBS)
+
+CLEANFILES += pam_cockpit_cert.so
+
+install-exec-local::
+	$(MKDIR_P) $(DESTDIR)$(pamdir)
+	$(INSTALL) pam_cockpit_cert.so $(DESTDIR)$(pamdir)
+
+uninstall-local::
+	$(RM) -f $(DESTDIR)$(pamdir)/pam_cockpit_cert.so
+
+libexec_SCRIPTS = cockpit-desktop
+
+cockpit-desktop: src/ws/cockpit-desktop.in
+	$(SUBST_RULE)
+
+EXTRA_DIST += \
+	$(systemd_units_in) \
+	src/ws/cockpit-desktop.in \
+	$(firewall_DATA) \
+	$(tempconf_in) \
+	$(NULL)
+
+CLEANFILES += \
+	$(patsubst %.in,%,$(systemd_units_in)) \
+	$(nodist_tempconf_DATA) \
+	cockpit-desktop \
+	$(NULL)
+
+appdatadir = $(datadir)/metainfo
+nodist_appdata_DATA = src/ws/cockpit.appdata.xml
+appdata_in = src/ws/cockpit.appdata.xml.in
+
+$(nodist_appdata_DATA): $(appdata_in) $(PO_FILES)
+	$(AM_V_GEN) $(MSGFMT) --xml -d $(top_srcdir)/po --template $< --output $@
+
+pixmapdir = $(datadir)/pixmaps
+pixmap_DATA = src/ws/cockpit.png
+
+CLEANFILES += \
+	$(nodist_appdata_DATA) \
+	$(NULL)
+
+EXTRA_DIST += \
+	$(appdata_in) \
+	$(pixmap_DATA) \
+	$(NULL)
+
+# ----------------------------------------------------------------------------------------------------
+
+noinst_PROGRAMS += test-server
+check_PROGRAMS += test-server
+
+GDBUS_CODEGEN_XML = $(srcdir)/src/ws/com.redhat.Cockpit.DBusTests.xml
+
+GDBUS_CODEGEN_GENERATED = \
+	src/ws/mock-dbus-tests.h \
+	src/ws/mock-dbus-tests.c \
+	$(NULL)
+
+# FIXME: --header/--body and --output are only available from GLib 2.56.
+# just use --generate-c-code and a bit of dependency ugliness for now
+GDBUS_CODEGEN_INVOCATION = \
+	$(AM_V_GEN) gdbus-codegen \
+	--interface-prefix com.redhat.Cockpit.DBusTests \
+	--c-namespace Test \
+	--c-generate-object-manager \
+	--generate-c-code src/ws/mock-dbus-tests \
+	$(GDBUS_CODEGEN_XML)
+
+BUILT_SOURCES += $(GDBUS_CODEGEN_GENERATED)
+CLEANFILES += $(GDBUS_CODEGEN_GENERATED)
+EXTRA_DIST += $(GDBUS_CODEGEN_XML)
+
+src/ws/mock-dbus-tests.h: $(GDBUS_CODEGEN_XML)
+	$(GDBUS_CODEGEN_INVOCATION)
+
+src/ws/mock-dbus-tests.c: $(GDBUS_CODEGEN_XML) src/ws/mock-dbus-tests.h
+	$(GDBUS_CODEGEN_INVOCATION)
+
+test_server_SOURCES = \
+	src/ws/mock-service.c \
+	src/ws/mock-service.h \
+	src/ws/test-server.c \
+	$(NULL)
+
+nodist_test_server_SOURCES = \
+	$(GDBUS_CODEGEN_GENERATED) \
+	$(NULL)
+
+test_server_CFLAGS = 					\
+	-I$(builddir)/src/ws \
+	-I$(top_srcdir)/src/ws \
+	-DG_LOG_DOMAIN=\"test-server\"			\
+	$(GIO_CFLAGS)					\
+	$(COCKPIT_WS_CFLAGS) \
+	$(NULL)
+
+test_server_LDADD = 					\
+	$(libcockpit_ws_LIBS) \
+	$(GIO_LIBS)					\
+	-lpam 						\
+	$(NULL)
+
+WS_CHECKS = \
+	test-base64 \
+	test-creds \
+	test-auth \
+	test-compat \
+	test-webservice \
+	test-channelresponse \
+	test-handlers \
+	test-kerberos \
+	test-remotectlcertificate \
+	$(NULL)
+
+test_auth_CFLAGS = $(cockpit_ws_CFLAGS)
+
+test_auth_SOURCES = \
+	src/ws/test-auth.c \
+	src/ws/mock-auth.c \
+	src/ws/mock-auth.h \
+	$(NULL)
+
+test_auth_LDADD = \
+	libcockpit-ws.a \
+	$(cockpit_ws_LDADD) \
+	$(NULL)
+
+test_channelresponse_CFLAGS = $(cockpit_ws_CFLAGS)
+test_channelresponse_SOURCES = src/ws/test-channelresponse.c \
+	src/ws/mock-auth.c src/ws/mock-auth.h \
+	src/common/mock-io-stream.c src/common/mock-io-stream.h \
+	$(NULL)
+test_channelresponse_LDADD = \
+	libwebsocket.a \
+	libcockpit-ws.a \
+	$(cockpit_ws_LDADD) \
+	$(NULL)
+
+test_compat_CFLAGS = $(cockpit_ws_CFLAGS)
+test_compat_SOURCES = src/ws/test-compat.c
+test_compat_LDADD = libcockpit-ws.a $(cockpit_ws_LDADD)
+
+test_creds_CFLAGS = $(cockpit_ws_CFLAGS)
+test_creds_SOURCES = src/ws/test-creds.c
+test_creds_LDADD = \
+	libcockpit-ws.a \
+	$(cockpit_ws_LDADD)
+
+test_handlers_CFLAGS = $(cockpit_ws_CFLAGS)
+
+test_handlers_SOURCES = \
+	src/ws/test-handlers.c \
+	src/ws/mock-auth.c src/ws/mock-auth.h \
+	src/common/mock-io-stream.c src/common/mock-io-stream.h \
+	$(NULL)
+
+test_handlers_LDADD = \
+	libcockpit-ws.a \
+	$(cockpit_ws_LDADD) \
+	$(NULL)
+
+test_remotectlcertificate_CFLAGS = \
+	$(COCKPIT_CFLAGS) \
+	$(NULL)
+test_remotectlcertificate_SOURCES = \
+	src/ws/test-remotectlcertificate.c \
+	src/ws/cockpitcertificate.c \
+	src/ws/cockpitcertificate.h \
+	src/ws/remotectl-certificate.c \
+	src/ws/remotectl.h \
+	$(NULL)
+test_remotectlcertificate_LDADD = \
+	libcockpit-common.a \
+	libcockpit-common-nodeps.a \
+	$(COCKPIT_LIBS) \
+	$(NULL)
+
+test_webservice_SOURCES = \
+	src/ws/test-webservice.c \
+	src/ws/mock-auth.c src/ws/mock-auth.h \
+	src/common/mock-io-stream.c src/common/mock-io-stream.h \
+	$(NULL)
+
+test_webservice_CFLAGS = $(cockpit_ws_CFLAGS)
+
+test_webservice_LDADD = \
+	libwebsocket.a \
+	libcockpit-ws.a \
+	$(cockpit_ws_LDADD) \
+	$(NULL)
+
+test_kerberos_SOURCES = src/ws/test-kerberos.c
+test_kerberos_LDADD =  $(cockpit_ws_LDADD) $(cockpit_session_LDADD)
+test_kerberos_CFLAGS = $(cockpit_ws_CFLAGS) $(cockpit_session_CFLAGS)
+
+mock_echo_SOURCES = src/ws/mock-echo.c
+mock_echo_CFLAGS = $(COCKPIT_WS_CFLAGS)
+mock_echo_LDADD = $(COCKPIT_WS_LIBS)
+
+mock_auth_command_SOURCES = src/ws/mock-auth-command.c
+mock_auth_command_LDADD = libcockpit-common-nodeps.a
+
+noinst_PROGRAMS += \
+	$(WS_CHECKS) \
+	mock-echo \
+	mock-auth-command \
+	$(NULL)
+
+noinst_SCRIPTS += \
+	src/ws/mock-cat-with-init \
+	$(NULL)
+
+if WITH_COCKPIT_SSH
+
+WS_CHECKS += \
+	test-authssh \
+	$(NULL)
+
+test_authssh_CFLAGS = $(cockpit_ws_CFLAGS)
+test_authssh_SOURCES = \
+	src/ws/test-authssh.c \
+	src/ws/mock-auth.c \
+	src/ws/mock-auth.h \
+	$(NULL)
+test_authssh_LDADD = \
+	libcockpit-ws.a \
+	$(cockpit_ws_LDADD)
+
+endif
+
+TESTS += $(WS_CHECKS)
+
+mock_pam_conv_mod_so_SOURCES = src/ws/mock-pam-conv-mod.c
+mock-pam-conv-mod.so$(EXEEXT): $(mock_pam_conv_mod_so_SOURCES)
+	$(AM_V_CCLD) $(CC) -fPIC -shared $(CFLAGS) -I$(builddir) \
+		-o $@ $^ $(PAM_LIBS) $(LDFLAGS)
+
+noinst_PROGRAMS += mock-pam-conv-mod.so
+CLEANFILES += mock-pam-conv-mod.so
+EXTRA_DIST += src/ws/fatal.conf
+
+testassetsdir = $(prefix)/lib/cockpit-test-assets
+testserviceddir = $(systemdunitdir)/cockpit.service.d
+
+install-tests::
+	$(MKDIR_P) $(DESTDIR)$(testassetsdir) $(DESTDIR)$(testserviceddir) $(DESTDIR)/etc/cockpit
+	$(INSTALL_DATA) mock-pam-conv-mod.so $(DESTDIR)$(testassetsdir)
+	$(INSTALL_DATA) $(srcdir)/src/ws/fatal.conf $(DESTDIR)/etc/cockpit/cockpit.conf
+
+install-exec-hook::
+	mkdir -p $(DESTDIR)$(sysconfdir)/cockpit/ws-certs.d $(DESTDIR)$(sysconfdir)/cockpit/machines.d
+	chmod 755 $(DESTDIR)$(sysconfdir)/cockpit/ws-certs.d $(DESTDIR)$(sysconfdir)/cockpit/machines.d

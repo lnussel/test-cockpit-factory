@@ -1,0 +1,155 @@
+#!/usr/bin/python3
+# generate debian/copyright from debian/copyright.template and node_modules
+# Author: Martin Pitt <mpitt@debian.org>
+#
+# package.json license: format uses https://spdx.org/licenses/ identifiers, which
+# are mostly compatible with
+# https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/#license-specification
+
+import os
+import sys
+import json
+import re
+import subprocess
+import argparse
+from glob import glob
+
+debian_dir = os.path.join(os.path.dirname(__file__), 'debian')
+template_file = os.path.join(debian_dir, 'copyright.template')
+
+
+def parse_args():
+    p = argparse.ArgumentParser(description='Generate debian/copyright file from template and node_modules')
+    p.add_argument('node_modules', help='path to node_modules directory')
+    return p.parse_args()
+
+
+def template_licenses(template):
+    '''Return set of existing License: short names'''
+
+    ids = set()
+    for l in template.splitlines():
+        if l.startswith('License:'):
+            ids.add(l.split(None, 1)[1].lower())
+    return ids
+
+
+def module_license(moddir):
+    '''Return License: short name for given module'''
+
+    # First check if package.json has a "license" field
+    try:
+        with open(os.path.join(moddir, 'package.json'), encoding='UTF-8') as f:
+            l = json.load(f)['license']
+            if l.startswith('(MIT OR'):
+                return 'MIT'
+            if l == 'MPL 2.0':
+                # https://github.com/novnc/noVNC/pull/819
+                return 'MPL-2.0'
+            return l
+    except (IOError, KeyError):
+        pass
+
+    # *LICENSE*/COPYING/README
+    if os.path.exists(os.path.join(moddir, 'MIT-LICENSE.txt')):
+        return 'MIT'
+    try:
+        with open((glob(os.path.join(moddir, 'LICENSE*')) +
+                   glob(os.path.join(moddir, 'COPYING')))[0]) as f:
+            text = f.read()
+        if 'Permission is hereby granted,' in text and 'THE SOFTWARE IS PROVIDED "AS IS"' in text:
+            return 'MIT'
+    except IndexError:
+        pass
+
+    raise SystemError('Could not determine license from %s' % moddir)
+
+
+def module_copyright(moddir):
+    '''Return Copyrights for given module'''
+
+    mod = os.path.basename(moddir)
+    copyrights = set()
+    try:
+        out = subprocess.check_output(['env', '-u', 'LANGUAGE', 'LC_ALL=C.UTF-8', 'grep', '-hri', 'copyright.*\([1-9][0-9]\+\|(c)\)'],
+                                      cwd=moddir).decode('UTF-8')
+        for l in out.splitlines():
+            # ignore compiled .css.map files
+            if l.startswith('{"version":') or '*//*!' in l:
+                continue
+            # weed out some noise
+            if 'grunt.template.today' in l or 'copyright-mark' in l or '@font-face' in l or 'Binary file' in l:
+                continue
+            if '<name of author>' in l:
+                continue
+            l = l.replace('<copyright>', '').replace('</copyright>', '')
+            l = l.replace('&copy;', '(c)').replace('copyright = ', '')
+            l = re.sub('@license.*Copyright', '', l)
+            l = l.strip(' \t*/\'|,')
+            if not l.endswith('Inc.'):
+                # avoids some duplicated lines which only differ in trailing dot
+                l = l.strip('.')
+            if l.startswith("u'") or l.startswith('u"'):  # Python unicode prefix
+                l = l[2:]
+            if 'Fixes #' in l:
+                continue  # this is from a changelog
+            # some noise fine-tuning for specific packages
+            if mod == 'bootstrap' and ('https://github.com' in l or l == 'Copyright 2015'):
+                continue
+            if mod == 'patternfly':
+                l = re.sub(' and licensed.*', '', l)
+
+            copyrights.add(' ' + l)  # space prefix for debian/copyright RFC822 format
+    except subprocess.CalledProcessError:
+        pass
+
+    if not copyrights:
+        # fall back to package.json's author
+        try:
+            with open(os.path.join(moddir, 'package.json')) as f:
+                author = json.load(f)['author']
+
+                # `author` can be either a string or a dict
+                # https://flaviocopes.com/package-json/#author
+                if isinstance(author, dict):
+                    author = author['name']
+                assert isinstance(author, str)
+
+                copyrights.add(' ' + author)
+        except (IOError, KeyError):
+            pass
+
+    if not copyrights:
+        raise SystemError('Did not find any copyrights in %s' % moddir)
+    return copyrights
+
+#
+# main
+#
+
+args = parse_args()
+
+with open(template_file, encoding='UTF-8') as f:
+    template = f.read()
+
+license_ids = template_licenses(template)
+paragraphs = []
+for module in sorted(os.listdir(args.node_modules)):
+    if module == 'README':
+        continue
+    moddir = os.path.join(args.node_modules, module)
+    license = module_license(moddir)
+    if license.lower() not in license_ids:
+        raise KeyError('%s has license %s which is not in %s' % (module, license, template_file))
+    copyrights = module_copyright(moddir)
+    paragraphs.append('''Files: node_modules/%s/*
+Copyright:%s
+License: %s''' % (module, '\n'.join(sorted(copyrights)), license))
+
+# force UTF-8 output, even when running in C locale
+for l in template.splitlines():
+    if '#NPM' in l:
+        sys.stdout.buffer.write('\n\n'.join(paragraphs).encode('UTF-8'))
+    else:
+        sys.stdout.buffer.write(l.encode('UTF-8'))
+    sys.stdout.buffer.write(b'\n')

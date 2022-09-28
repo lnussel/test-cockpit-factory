@@ -1,0 +1,25 @@
+@import "../../node_modules/@patternfly/react-styles/css/components/Alert/alert.css";
+@import "../lib/page.scss";
+@import "../../node_modules/@patternfly/patternfly/components/Button/button.scss";
+@import "../lib/table.css";
+
+#sos-error-extra {
+    width:      100%;
+    max-width:  100%;
+    min-width:  100%;
+    min-height: 200px;
+}
+
+.page-ct {
+    text-align: center;
+}
+
+#sos-progress > div:first-child,
+#sos-download > div:first-child
+{
+    margin-bottom: 5px;
+}
+
+#sos-progress .progress-bar {
+    width: 0%;
+}

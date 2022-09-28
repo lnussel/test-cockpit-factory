@@ -1,0 +1,27 @@
+#!/bin/sh -e
+
+top_srcdir=$(realpath -m "$0"/../../..)
+image=cockpit/unit-tests:latest
+flags=''
+cmd=''
+
+while test $# -gt 0; do
+  case "$1" in
+    --docker) docker="docker";;
+    --podman) docker="podman";;
+    CC=*) ccarg="--env=$1";;
+    shell) flags=-it; cmd=/bin/bash;;
+    :*) image=cockpit/unit-tests"$1";;
+    *) echo "Unknown option '$1'"; exit 1;;
+  esac
+  shift
+done
+
+if test -z "${docker:=$(which podman || which docker || true)}"; then
+  echo 'Neither podman nor docker are installed'
+  exit 1
+fi
+
+set -ex
+exec ${docker} run --shm-size=512M --volume "${top_srcdir}":/source:ro \
+       ${ccarg:+"$ccarg"} $flags -- "$image" $cmd

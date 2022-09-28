@@ -1,0 +1,158 @@
+/*
+ * This file is part of Cockpit.
+ *
+ * Copyright (C) 2019 Red Hat, Inc.
+ *
+ * Cockpit is free software; you can redistribute it and/or modify it
+ * under the terms of the GNU Lesser General Public License as published by
+ * the Free Software Foundation; either version 2.1 of the License, or
+ * (at your option) any later version.
+ *
+ * Cockpit is distributed in the hope that it will be useful, but
+ * WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
+ * Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with Cockpit; If not, see <http://www.gnu.org/licenses/>.
+ */
+import React from 'react';
+import PropTypes from 'prop-types';
+import cockpit from 'cockpit';
+
+import { networkId } from '../../helpers.js';
+import { changeNetworkAutostart } from '../../libvirt-dbus.js';
+
+import '../overviewTab.css';
+import 'form-layout.scss';
+
+const _ = cockpit.gettext;
+
+const DHCPHost = (host, index, family, idPrefix) => {
+    const id = `${idPrefix}-${family}-dhcp-host-${index}`;
+
+    const hostVals = [];
+    if (host.name)
+        hostVals.push(_("Name: ") + host.name);
+    if (host.mac) // MAC for ipv4, ID for ipv6
+        hostVals.push("MAC: " + host.mac);
+    else if (host.id)
+        hostVals.push("ID: " + host.id);
+    if (host.ip)
+        hostVals.push("IP: " + host.ip);
+
+    const hostInfo = hostVals.join(", ");
+
+    return (<React.Fragment key={index}>
+        <label className='control-label' htmlFor={id}> {`DHCP Host ${index + 1}`} </label>
+        <div id={id}> {hostInfo} </div>
+    </React.Fragment>);
+};
+
+export class NetworkOverviewTab extends React.Component {
+    constructor(props) {
+        super(props);
+
+        this.onAutostartChanged = this.onAutostartChanged.bind(this);
+    }
+
+    onAutostartChanged() {
+        const { dispatch, network } = this.props;
+        const autostart = !network.autostart;
+
+        changeNetworkAutostart(network, autostart, dispatch);
+    }
+
+    render() {
+        const network = this.props.network;
+        const idPrefix = `${networkId(network.name, network.connectionName)}`;
+
+        const ip = [];
+        // Libvirt allows network to have multiple ipv6 and ipv4 addresses.
+        // But we only first one of each
+        ip[0] = network.ip.find(ip => ip.family === "ipv4");
+        ip[1] = network.ip.find(ip => ip.family === "ipv6");
+
+        return (
+            <>
+                <div className="overview-tab-grid">
+                    <div className='ct-form'>
+                        <label className='control-label label-title'> {_("General")} </label>
+                        <span />
+
+                        <label className='control-label' htmlFor={`${idPrefix}-persistent`}> {_("Persistent")} </label>
+                        <div id={`${idPrefix}-persistent`}> {network.persistent ? _("yes") : _("no")} </div>
+
+                        {network.persistent && <>
+                            <label className='control-label' htmlFor={`${idPrefix}-autostart`}> {_("Autostart")} </label>
+                            <label className='checkbox-inline'>
+                                <input id={`${idPrefix}-autostart-checkbox`}
+                                       type="checkbox"
+                                       checked={network.autostart}
+                                       onChange={this.onAutostartChanged} />
+                                {_("Run when host boots")}
+                            </label>
+                        </>}
+
+                        { network.mtu && <>
+                            <label className='control-label' htmlFor={`${idPrefix}-mtu`}> {_("Maximum Transmission Unit")} </label>
+                            <div id={`${idPrefix}-mtu`}> {network.mtu} </div>
+                        </> }
+                    </div>
+
+                    <div className="ct-form">
+                        { ip[0] && <>
+                            <label className='control-label label-title'> {_("IPv4 Address")} </label>
+                            <span />
+
+                            { ip[0].address && <>
+                                <label className='control-label' htmlFor={`${idPrefix}-ipv4-address`}> {_("Address")} </label>
+                                <div id={`${idPrefix}-ipv4-address`}> {ip[0].address} </div>
+                            </> }
+
+                            { ip[0].netmask && <>
+                                <label className='control-label' htmlFor={`${idPrefix}-ipv4-netmask`}> {_("Netmask")} </label>
+                                <div id={`${idPrefix}-ipv4-netmask`}> {ip[0].netmask} </div>
+                            </> }
+
+                            { ip[0].dhcp.range.start && <>
+                                <label className='control-label' htmlFor={`${idPrefix}-ipv4-dhcp-range`}> {_("DHCP Range")} </label>
+                                <div id={`${idPrefix}-ipv4-dhcp-range`}> {ip[0].dhcp.range.start + " - " + ip[0].dhcp.range.end} </div>
+                            </> }
+
+                            { ip[0].dhcp.hosts.map((host, index) => DHCPHost(host, index, ip[0].family, idPrefix))}
+                        </> }
+
+                        { ip[1] && <>
+                            <hr />
+                            <label className='control-label label-title'> {_("IPv6 Address")} </label>
+                            <span />
+
+                            { ip[1].address && <>
+                                <label className='control-label' htmlFor={`${idPrefix}-ipv6-address`}> {_("Address")} </label>
+                                <div id={`${idPrefix}-ipv6-address`}> {ip[1].address} </div>
+                            </> }
+
+                            { ip[1].prefix && <>
+                                <label className='control-label' htmlFor={`${idPrefix}-ipv6-prefix`}> {_("Prefix")} </label>
+                                <div id={`${idPrefix}-ipv6-prefix`}> {ip[1].prefix} </div>
+                            </> }
+
+                            { ip[1].dhcp.range.start && <>
+                                <label className='control-label' htmlFor={`${idPrefix}-ipv6-dhcp-range`}> {_("DHCP Range")} </label>
+                                <div id={`${idPrefix}-ipv6-dhcp-range`}> {ip[1].dhcp.range.start + " - " + ip[1].dhcp.range.end} </div>
+                            </> }
+
+                            { ip[1].dhcp.hosts.map((host, index) => DHCPHost(host, index, ip[1].family, idPrefix))}
+                        </> }
+                    </div>
+                </div>
+            </>
+        );
+    }
+}
+
+NetworkOverviewTab.propTypes = {
+    dispatch: PropTypes.func.isRequired,
+    network: PropTypes.object.isRequired,
+};

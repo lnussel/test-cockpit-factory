@@ -1,0 +1,17 @@
+{
+    "version": "@VERSION@",
+    "requires": {
+	"cockpit": "122"
+    },
+
+    "tools": {
+        "setroubleshoot": {
+            "label": "SELinux",
+            "keywords": [
+                {
+                    "matches": ["setroubleshoot", "semanage", "avc"]
+                }
+            ]
+        }
+    }
+}

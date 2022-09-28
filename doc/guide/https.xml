@@ -1,0 +1,107 @@
+<?xml version="1.0"?>
+<!DOCTYPE chapter PUBLIC "-//OASIS//DTD DocBook XML V4.3//EN"
+	"http://www.oasis-open.org/docbook/xml/4.3/docbookx.dtd">
+<chapter id="https">
+  <title>SSL/TLS Usage</title>
+
+  <para>Cockpit usually requires that web browsers communicate with it using HTTPS,
+    for security reasons.</para>
+
+  <section id="https-required">
+    <title>HTTPS Requirement</title>
+
+    <para>Cockpit listens for both HTTP and HTTPS connections on the same port, by
+      default 9090. If an HTTP connection is made, Cockpit will redirect that
+      connection to HTTPS. There are some exceptions:</para>
+
+    <itemizedlist>
+      <listitem><para>If an HTTP connection comes from <code>127.0.0.0/8</code>, then
+        Cockpit will allow communication without redirecting to HTTPS.</para></listitem>
+      <listitem><para>Certain URLs, like <code>/ping</code> are not required to use
+        HTTPS.</para></listitem>
+    </itemizedlist>
+
+    <para>This behavior can be overridden by setting the
+      <code>AllowUnencrypted</code> option in <code>cockpit.conf</code>.</para>
+  </section>
+    
+  <section id="https-certificates">
+    <title>Certificates</title>
+
+    <para>Cockpit will load a certificate from the <code>/etc/cockpit/ws-certs.d</code>
+      directory. It will use the last file with a <code>.cert</code> or <code>.crt</code>
+      extension in alphabetical order. The file should contain one or more OpenSSL
+      style <literal>BEGIN CERTIFICATE</literal> blocks for the server certificate and
+      the intermediate certificate authorities.</para>
+
+    <para>The private key can either be contained in the same <code>.cert</code>/<code>.crt</code>
+    file as an additional <literal>BEGIN PRIVATE KEY</literal> or similar block, or in
+    a separate file with the same name as the certificate, but with a <code>.key</code>
+    suffix instead. The key must not be encrypted. For example, a merged file looks like this:</para>
+
+<programlisting>
+-----BEGIN CERTIFICATE-----
+MIIDUzCCAjugAwIBAgIJAPXW+CuNYS6QMA0GCSqGSIb3DQEBCwUAMD8xKTAnBgNV
+BAoMIGI0OGE2NGNkNmMwNTQ1YThhZTgxOTEzZDE5YmJjMmRjMRIwEAYDVQQDDAls
+...
+-----END CERTIFICATE-----
+-----BEGIN CERTIFICATE-----
+MIIDUzCCAjugAwIBAgIJAPXW+CuNYS6QMA0GCSqGSIb3DQEBCwUAMD8xKTAnBgNV
+BAoMIGI0OGE2NGNkNmMwNTQ1YThhZTgxOTEzZDE5YmJjMmRjMRIwEAYDVQQDDAls
+...
+-----END CERTIFICATE-----
+-----BEGIN PRIVATE KEY-----
+MIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQCyOJ5garOYw0sm
+8TBCDSqQ/H1awGMzDYdB11xuHHsxYS2VepPMzMzryHR137I4dGFLhvdTvJUH8lUS
+...
+-----END PRIVATE KEY-----
+</programlisting>
+
+    <para>Note that for EC keys, the <literal>BEGIN EC PARAMETERS</literal> block must occur
+      <emphasis>before</emphasis> the <literal>BEGIN EC PRIVATE KEY</literal> block (this
+      is how OpenSSL, LetsEncrypt, etc. generate the key files).</para>
+
+    <para>If no certificate is found, a self-signed certificate is created and
+      stored in the <filename>0-self-signed.cert</filename> file. On some
+      platforms, Cockpit will also generate a ca.crt in that directory, which
+      may be safely imported into client browsers.</para>
+
+    <para>To check which certificate <code>cockpit-ws</code> will use run
+      the following command.</para>
+<programlisting>
+$ sudo remotectl certificate
+</programlisting>
+
+    <para>If using <code>certmonger</code> to manage certificates, following command can
+    be used to automatically prepare concatenated .cert file:</para>
+
+    <programlisting>
+CERT_FILE=/etc/pki/tls/certs/$(hostname).pem
+KEY_FILE=/etc/pki/tls/private/$(hostname).key
+
+getcert request -f ${CERT_FILE} -k ${KEY_FILE} -D $(hostname --fqdn) -C "sed -n w/etc/cockpit/ws-certs.d/50-from-certmonger.cert ${CERT_FILE} ${KEY_FILE}"
+    </programlisting>
+  </section>
+
+  <section id="https-compat">
+    <title>SSL Versions and Ciphers</title>
+
+    <para>By default Cockpit will only use modern secure ciphers and versions of TLS.
+      In particular SSL v3.0 is disabled by default, as well as the RC4 cipher.</para>
+
+    <para>If you wish to enable these legacy protocols and algorithms you can do so
+      by passing an environment variable to cockpit-ws. Place the following in the
+      <code>/etc/systemd/system/cockpit.service.d/ssl.conf</code> file. Create the
+      file and directories in that path which don't already exist.</para>
+
+<programlisting>
+[Service]
+Environment=G_TLS_GNUTLS_PRIORITY=NORMAL:%COMPAT
+</programlisting>
+
+    <para>The environment variable value is a
+      <ulink url="https://gnutls.org/manual/html_node/Priority-Strings.html#Priority-Strings">GnuTLS priority string</ulink>.</para>
+
+  </section>
+
+</chapter>

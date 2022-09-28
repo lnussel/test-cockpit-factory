@@ -1,0 +1,25 @@
+{
+    "version": "@VERSION@",
+    "requires": {
+	"cockpit": "122"
+    },
+
+    "tools": {
+        "index": {
+            "label": "Applications",
+            "keywords": [
+                {
+                    "matches": ["plugin", "apps", "addon", "add-on", "install", "extension"]
+                }
+            ]
+        }
+    },
+
+    "content-security-policy": "img-src *",
+
+    "config": {
+        "appstream_config_packages": @with_appstream_config_packages@,
+        "appstream_data_packages": @with_appstream_data_packages@
+    }
+
+}

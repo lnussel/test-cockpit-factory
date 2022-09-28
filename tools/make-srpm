@@ -1,0 +1,41 @@
+#!/bin/bash
+# This file is part of Cockpit.
+#
+# Copyright (C) 2013 Red Hat, Inc.
+#
+# Cockpit is free software; you can redistribute it and/or modify it
+# under the terms of the GNU Lesser General Public License as published by
+# the Free Software Foundation; either version 2.1 of the License, or
+# (at your option) any later version.
+#
+# Cockpit is distributed in the hope that it will be useful, but
+# WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
+# Lesser General Public License for more details.
+#
+# You should have received a copy of the GNU Lesser General Public License
+# along with Cockpit; If not, see <http://www.gnu.org/licenses/>.
+
+set -eu
+
+if [ $# -gt 1 ]; then
+    echo "usage: make-srpm [tarball]" >&2
+    exit 2
+fi
+
+# When running in an external make this breaks our use
+# of make in the make-srpm lib tool and make-source
+
+export MAKEFLAGS=
+export MAKELEVEL=
+export MFLAGS=
+
+base=$(cd $(dirname $0)/..; pwd -P)
+
+if [ -z ${1-} ]; then
+    source=$("$base/bots/make-source")
+else
+    source="$1"
+fi
+
+exec "$base/bots/images/scripts/lib/make-srpm" "$source"

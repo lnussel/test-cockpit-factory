@@ -1,0 +1,821 @@
+/*
+ * This file is part of Cockpit.
+ *
+ * Copyright (C) 2013 Red Hat, Inc.
+ *
+ * Cockpit is free software; you can redistribute it and/or modify it
+ * under the terms of the GNU Lesser General Public License as published by
+ * the Free Software Foundation; either version 2.1 of the License, or
+ * (at your option) any later version.
+ *
+ * Cockpit is distributed in the hope that it will be useful, but
+ * WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
+ * Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with Cockpit; If not, see <http://www.gnu.org/licenses/>.
+ */
+
+/* ---------------------------------------------------------------------------------------------------- */
+
+@import "../lib/page.scss";
+@import "../lib/table.css";
+@import "variables";
+@import "switcher.scss";
+@import "active-pages.scss";
+@import "../../node_modules/@patternfly/patternfly/components/Button/button.scss";
+
+/* Hacks on top for now */
+
+html, body {
+    height: 100%;
+}
+
+html.index-page body {
+    overflow: hidden;
+}
+
+.hide-before:before {
+    display: none;
+}
+
+.curtains-ct {
+    top: auto;
+    position: static;
+}
+
+#sync-users {
+    max-height: 126px;
+    overflow-y: auto;
+    overflow-x: none;
+    display: block;
+    border: 1px solid #BABABA;
+    margin-bottom: 15px;
+}
+
+#sync-users table.table {
+    margin-bottom: 0;
+}
+
+#sync-users .table > tbody > tr:first-child > td {
+    border-top: none;
+}
+
+#sync-users .center-spinner {
+    padding: 15px;
+}
+
+#machine-change-auth > p {
+    margin-bottom: 5px;
+}
+
+#add-unknown-host pre {
+    margin: 0;
+}
+
+#edit-machine-port {
+    width: 100px;
+}
+
+/* navbar documentation */
+
+#navbar-docs-items a {
+    color: var(--color-link)
+}
+
+#navbar-docs .dropdown-menu a i.fa{
+    padding-left: 5px;
+    vertical-align: baseline;
+}
+
+
+/* navbar styles */
+
+.navbar-pf .navbar-toggle {
+    color: var(--color-ct-nav-main-text);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.navbar-primary .btn-group {
+    margin: 5px 0;
+}
+
+.navbar-primary .btn-group .pf-c-button {
+    background-image:  linear-gradient(to bottom, #151515 0%, #030303 100%);
+    padding: 5px 20px;
+    color: var(--color-button-text);
+    border-color: var(--color-gray-12);
+}
+
+.navbar-primary .btn-group .pf-c-button:hover {
+    background-image: linear-gradient(to bottom, #2f2f2f 0%, #232323 100%);
+}
+
+.navbar-primary .btn-group .pf-c-button.active {
+    background-image: linear-gradient(to bottom, #2f2fFF 0%, #2323FF 100%);
+}
+
+
+.navbar-primary .btn-group > .pf-c-button:first-child:not(:last-child):not(.dropdown-toggle) {
+    border-radius: 5px 0 0 5px;
+}
+
+.navbar-primary .btn-group > .pf-c-button:last-child:not(:first-child):not(.dropdown-toggle) {
+    border-radius: 0 5px 5px 0;
+}
+
+.navbar-primary .btn-group > .pf-c-button:only-child:not(.dropdown-toggle) {
+    border-radius: 5px 5px 5px 5px;
+}
+
+/* Style a search box in navigation bar */
+
+.navbar-primary .navbar-form {
+    margin: 7px;
+    box-shadow: none;
+}
+
+.navbar-header .navbar-toggle {
+    display: none;
+}
+
+.navbar-header .navbar-brand {
+    font-size: var(--pf-global--FontSize--xl);
+    padding: 1.25rem;
+}
+
+@media (max-width: 767px) {
+    .navbar-pf-vertical .navbar-toggle {
+        display: block;
+    }
+
+    .navbar-header .navbar-brand {
+        padding: 13px 0 0;
+    }
+}
+
+.navbar-default .navbar-form {
+    border-color: transparent;
+}
+
+#machine-dropdown {
+    padding: 0;
+    margin: 0;
+
+    .dropdown-menu {
+        width: $sidebar-width-full;
+        top: 4rem;
+        /* Align to arrow: 50% width + button padding + arrow width */
+        right: "calc(-50% + 3rem + 10px)";
+        left: auto;
+        overflow: visible;
+        padding: 0;
+
+        > .form-group {
+            margin: 0;
+            padding: 0.5rem;
+            padding-bottom: 0;
+            position: relative;
+
+            > .form-control-feedback {
+                color: var(--color-subtle-copy);
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                top: 0;
+                bottom: 0;
+                left: 0;
+                height: auto;
+                width: 2.5rem;
+                margin: 0.5rem;
+                margin-bottom: 0;
+            }
+        }
+
+        > ul[role="menu"] {
+            max-height: 75vh;
+            overflow: auto;
+            overflow-x: hidden;
+            padding: 0;
+            position: relative;
+            margin: 0 0 0.5rem;
+
+            > li {
+                position: relative;
+                padding: 0;
+
+                &:not(.hidden) {
+                    // Bump up the first non-hidden li
+                    margin-top: 0.5rem;
+
+                    ~ :not(.hidden) {
+                        // And reset margin for any following
+                        margin-top: 0;
+                    }
+                }
+
+                a {
+                    padding: 0.5rem 1rem;
+                    display: block;
+                    background: var(--color-ct-list-bg);
+                    color: var(--color-ct-list-text);
+                    text-decoration: none;
+
+                    > span {
+                        display: block;
+                        text-overflow: ellipsis;
+                        overflow: hidden;
+                        white-space: nowrap;
+                    }
+
+                    &:hover {
+                        background: var(--color-ct-list-hover-bg);
+                        border-color: var(--color-ui-hover-border);
+                        color: var(--color-ct-list-hover-text);
+                    }
+                }
+
+                &.active a {
+                    border: 1px solid var(--color-ct-list-selected-border);
+                    border-width: 1px 0;
+                    background: var(--color-ct-list-selected-bg);
+                    color: var(--color-ct-list-selected-text);
+                }
+            }
+
+            .fa-li {
+                position: static;
+                width: auto;
+                margin: 0 1ex 0 0;
+            }
+        }
+    }
+
+    #machine-link {
+        padding: 0 1rem;
+        margin: 0;
+        line-height: 4rem;
+        color: var(--color-ct-nav-text);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        display: flex;
+        align-items: center;
+        text-decoration: none;
+        font-size: 1rem;
+
+        img, b {
+            flex: none;
+        }
+
+        img {
+            width: 24px;
+            height: auto;
+        }
+
+        span {
+            flex: auto;
+            padding: 0 0 0 1ex;
+        }
+
+        &:hover {
+            background: var(--color-ct-nav-hover);
+            color: var(--color-ct-nav-hover-text);
+        }
+    }
+
+    .dropdown-menu {
+        // Dropdown menu triangle pointer & border
+        &::before,
+        &::after {
+            border: 10px solid transparent;
+            border-top-width: 0;
+            border-bottom-color: var(--color-bg);
+            top: -8px;
+            content: '';
+            height: 0;
+            left: 50%;
+            margin: 0 0 0 -5px;
+            position: absolute;
+            width: 0;
+            z-index: 10;
+        }
+
+        // Triangle border
+        &::after {
+            border-bottom-color: var(--color-border);
+            top: -10px;
+            z-index: -1;
+        }
+    }
+
+    input {
+        padding-left: 2.125rem;
+        padding-right: 0.5rem;
+    }
+
+    i.fa-search {
+        top: 6px;
+        left: 0;
+    }
+}
+
+
+
+.nav > li[hidden] {
+    display: none;
+}
+
+.navbar-advanced {
+    display: none;
+}
+
+.credential-lock > * {
+    display: none !important;
+}
+
+.credential-lock.credential-locked > *:first-child {
+    display: block !important;
+}
+
+.credential-lock.credential-unlocked > *:last-child {
+    display: block !important;
+}
+
+thead.credential-lock.credential-locked > *:first-child {
+    display: table-row !important;
+}
+
+thead.credential-lock.credential-unlocked > *:last-child {
+    display: table-row !important;
+}
+
+
+/* The server avatar */
+#server-avatar {
+    width:       128px;
+    height:      128px;
+    margin-left:  21px;     /* This centers it in #server-nav-column. */
+    border-radius: 5px;
+}
+
+.server-graph .flot-y-axis .flot-tick-label {
+    margin-right: 5px;
+}
+
+/*
+ * The oops status in the navbar, used when an unhandled exception
+ * occurs.
+ */
+
+.oops-status {
+    color: red;
+    font-weight: bold;
+}
+
+.slider {
+    display: block;
+    margin: 10px 10px;
+    height: 5px;
+    white-space: nowrap;
+    font-size: 0px;
+    background-color: #e7e7e7;
+    cursor: pointer;
+    user-select: none;
+    -moz-user-select: none;
+    -webkit-user-select: none;
+}
+
+.slider-warning {
+    background-color: #d4a096;
+}
+
+.slider-bar {
+    position: relative;
+    height: 5px;
+}
+
+.slider > .slider-bar > .slider-bar {
+    border-right: 3px solid white;
+    height: 5px;
+    position: relative;
+}
+
+.slider > .slider-bar > .slider-bar {
+    display: inline-block;
+}
+
+.slider > div:first-child {
+    float: left;
+    background-color: var(--color-link);
+}
+
+.slider-disabled > div:first-child {
+    cursor: auto;
+    background-color: #e7e7e7;
+}
+
+.slider-thumb {
+    position: absolute;
+    border-radius: 9px;
+    background-color: var(--color-link);
+    width: 18px;
+    height: 18px;
+    top: -6px;
+    right: -9px;
+    content: '.';
+    cursor: pointer;
+    border: 1px solid #267da1;
+    z-index: 1;
+}
+
+.slider-disabled .slider-thumb {
+    background-color: #e7e7e7;
+    border: 1px solid #d7d7d7;
+    cursor: auto;
+}
+
+/* server overview dashboard */
+#server .info-table-ct button {
+    max-width: 300px;
+}
+
+#server .info-table-ct td:first-child {
+    max-width: 50%
+}
+
+#server .info-table-ct {
+    width: 100%;
+}
+
+@media (min-width: 992px) {
+    #server .info-table-ct {
+        table-layout: fixed;
+        width: 100%;
+        min-width: 220px;
+    }
+
+    /* server overview dashboard */
+    #server .info-table-ct-container td button {
+        max-width: 100%;
+    }
+}
+
+@media (max-width: 991px) {
+    #server .info-table-ct-container {
+        padding: 0 0 20px;
+
+        th,
+        td:first-child {
+            padding-left: 0;
+        }
+
+        td:last-child {
+            max-width: 50vw;
+        }
+    }
+}
+
+@media (max-width: 480px) {
+    #server .info-table-ct-container {
+
+        td {
+            overflow: auto;
+            overflow-wrap: break-word;
+
+            /* server overview dashboard */
+            button {
+                max-width: 200px;
+            }
+        }
+    }
+}
+
+#connecting {
+    height: 100%;
+    background-color: var(--color-gray-2);
+    text-align: center;
+    padding-top: 120px;
+}
+
+/* workaround: make text red for select if contained in has-error, not in patternfly */
+.has-error > .bootstrap-select > button > span {
+    color: #A94442;
+}
+
+/* System information */
+
+#systime-date-input {
+    display: inline;
+    width: 150px;
+}
+
+#systime-time-hours,
+#systime-time-minutes {
+    display: inline;
+    width: 50px;
+}
+
+/* index page */
+
+.oops-status {
+    color: red;
+    font-weight: bold;
+}
+
+#display-language-list {
+    width: 100%;
+}
+
+#display-language-list option {
+    padding: 10px;
+}
+
+iframe.container-frame {
+    display: none;
+    border: none;
+    width: 100%;
+}
+
+/* Credentials dialog */
+#ssh-file-container, #ssh-file-add {
+  display: inline-block;
+}
+
+#credentials-dialog {
+    div.table-scrollable {
+        max-height: 500px;
+        overflow-y: auto;
+        margin-right: 7px;
+        padding-right: 8px;
+        margin-top: 15px;
+        padding-top: 0px;
+    }
+
+    table {
+        margin-top: 0px;
+        width: 100%;
+
+        thead tr.load-custom-key {
+            td.has-error div.dialog-error {
+                display: block;
+            }
+
+            td {
+                padding-left: 15px;
+                padding-bottom: 15px;
+                padding-top: 0;
+
+                .dropdown-menu {
+                    max-height: 100px;
+                }
+
+                input {
+                    width: 500px;
+                }
+
+                button {
+                    padding-right: 10px;
+                    padding-left: 10px;
+                }
+
+                span.input-group-btn {
+                    border-left: 2px solid transparent;
+                }
+
+                div.dialog-error {
+                    display: none;
+                }
+            }
+        }
+
+        tbody.ssh-add-key-body {
+            display: none;
+        }
+
+        tbody.ssh-add-key-body.unlock {
+            display: table-row-group;
+        }
+
+        dd, dt {
+            padding-top: 3px;
+            min-height: 26px;
+        }
+
+        dt {
+            min-width: 80px;
+            max-width: 100px;
+        }
+
+        input[type='password'] {
+            width: 300px;
+        }
+
+
+        textarea {
+            color: var(--color-gray-12) !important;
+        }
+
+        dt label {
+            margin-bottom: 0px;
+        }
+    }
+
+    thead td {
+        padding-left: 15px;
+        padding-bottom: 15px;
+    }
+
+    tbody .credential-unlock {
+        display: none;
+    }
+
+    tbody.unlock .credential-panel {
+        display: none !important;
+    }
+
+    tbody.unlock .credential-unlock {
+        display: block;
+    }
+}
+
+.credential-data {
+    overflow-wrap: break-word;
+    word-break: break-all;
+}
+
+.banned {
+    color: var(--color-red-hat-red);
+    font-size: 75px;
+    line-height: 75px;
+    float: left;
+    padding-right: 15px;
+}
+
+.listing-ct-body .alert {
+    border: none;
+    margin: 0px 0px 10px 0px;
+    padding: 0px;
+    background-color: transparent;
+}
+
+.listing-ct-body .alert .fa {
+    position: relative;
+    left: 0px;
+    top: 3px;
+    padding-right: 5px;
+}
+
+#machine-spinner {
+    margin: 1rem;
+}
+
+.spinner-white {
+    border-bottom: 4px solid rgba(255, 255, 255, 0.25);
+    border-left: 4px solid rgba(255, 255, 255, 0.25);
+    border-right: 4px solid rgba(255, 255, 255, 0.25);
+    border-top: 4px solid rgba(255, 255, 255, 0.75);
+}
+
+/* allow text only branding */
+.navbar-pf .navbar-brand {
+    text-transform: uppercase;
+    margin: 0 8px;
+}
+
+.navbar-pf .navbar-brand:hover {
+    color: var(--color-gray-1);
+}
+
+/***
+Disclaimer: Fixing the navbar dropdown requires consideration of CSS
+specificity. As PatternFly is super-specific, we either had to use
+!important everywhere or include IDs.
+
+What follows is not best-practice, but a necessary fix.
+It is less bad than using !important, at least.
+***/
+
+#topnav {
+    .fa,
+    .pficon {
+        align-items: center;
+        border-radius: 50%;
+        display: inline-flex;
+        font-size: 1rem;
+        justify-content: center;
+        margin-right: 0.5rem;
+        padding-right: 0;
+        position: static;
+        vertical-align: middle;
+        height: 2rem;
+    }
+
+    .pficon-user {
+        width: 2rem;
+        font-size: 2rem;
+        background: #fff;
+        color: #bbb;
+        overflow: hidden;
+
+        &::before {
+            font-size: 80%;
+            position: relative;
+            top: 8%;
+        }
+    }
+}
+@media (min-width: 768px) {
+    /* Override navbar utility menu for desktop */
+    #topnav {
+        .navbar-utility > li > a,
+        .navbar-utility > li > span {
+            line-height: 2rem;
+            padding: 1rem;
+            font-size: var(--pf-global--FontSize--md);
+            margin: 0;
+            color: var(--pf-global--Color--light-100) !important;
+        }
+
+        .credential-unlocked {
+            /* AAA contrast: simulate #a1a1a1 on #151515 */
+            opacity: 0.6;
+        }
+
+        .navbar-utility .dropdown-menu {
+            /* Expand to user's name */
+            min-width: 100%;
+        }
+
+        .fa,
+        .pficon {
+            vertical-align: bottom;
+        }
+    }
+}
+@media (max-width: 767px) {
+    /* Override navbar utility menu for mobile */
+    #topnav {
+        .navbar-utility > li > a,
+        .navbar-utility > li > span {
+            margin: 0;
+            padding: 0 20px;
+            line-height: 54px;
+        }
+        .dropdown-menu > li > a,
+        .dropdown-menu > li > span {
+            /* Make menu items a consistent, touch-friendly size */
+            padding: 0 40px;
+            line-height: 54px;
+        }
+
+        .fa-bars {
+            margin: 0;
+        }
+    }
+}
+
+// Add color to nav icons
+#host-apps .list-group-item {
+    .fa-info-circle {
+        color: var(--pf-global--info-color--100);
+    }
+
+    .fa-exclamation-triangle {
+        color: var(--pf-global--warning-color--100);
+    }
+
+    .fa-exclamation-circle {
+        color: #f54f42;
+    }
+
+    // Add a background to shine through the icon's gaps
+    // (for better contrast, even when hovering / selected)
+    .fa {
+        // Set position for the icon sandwiching
+        position: relative;
+        // Add a shadow around the icon
+        text-shadow: 1px 0 1px var(--color-ct-nav), 0 1px 1px var(--color-ct-nav), -1px 0 1px var(--color-ct-nav), 0 -1px 1px var(--color-ct-nav);
+
+        // Move the icon up the stack
+        &::before {
+            z-index: 1;
+            position: relative;
+        }
+
+        // Fill the interior gaps
+        &::after {
+            position: absolute;
+            content: '';
+            background-color: var(--color-ct-nav);
+            border-radius: 3px;
+            top: 3px;
+            right: 5px;
+            bottom: 3px;
+            left: 5px;
+        }
+    }
+}

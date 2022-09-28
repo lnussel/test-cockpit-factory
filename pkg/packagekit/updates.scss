@@ -1,0 +1,374 @@
+.pk-updates--header {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    padding: 1.5rem 0 1rem;
+
+    &--heading,
+    &--actions {
+        padding: 0.5rem 0 0;
+    }
+    &--heading {
+        margin: 0;
+        padding-right: 15px;
+    }
+    &--actions {
+        > .pf-c-button,
+        > .btn-group {
+            margin: 5px 5px 0 0;
+
+            &:last-child {
+                margin-right: 0;
+            }
+        }
+    }
+}
+
+@media screen and (min-width: 640px) {
+    .pk-updates--header--auto {
+        justify-content: start;
+    }
+}
+
+/* override default cockpit CSS, as this doesn't fit our table */
+table.listing-ct {
+    margin-top: 0;
+    margin-bottom: 3rem;
+    width: 100%;
+}
+
+table.listing-ct thead th {
+    padding-left: 0;
+
+    &:last-child {
+        text-align: left;
+    }
+}
+
+tr.listing-ct-item {
+    td, th {
+        /* We *should* align to baseline, but names wrap */
+        /* Padding and text side is the same, so top works here */
+        /* Too bad table doesn't align to "first baseline", like flex/grid */
+        vertical-align: top;
+    }
+    td:not(:first-child) {
+        padding-left: 0;
+    }
+
+    th:last-child {
+        text-align: left;
+    }
+
+    @media screen and (min-width: 641px) {
+        /* Desktop: Truncate version by default and untruncate on hover */
+        td.version {
+            width: 18ex;
+            /* Tables are stretchy, so we *also* need the max-width */
+            max-width: 18ex;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+
+            /* Expand version string when hovering */
+            &:hover {
+                overflow: visible;
+
+                .truncating {
+                    background: linear-gradient(to left, rgba(237, 248, 255, 0), var(--color-ct-list-hover-bg) 3em);
+                    position: relative;
+                    padding: 0.5em 4em 0.5em 0;
+                }
+            }
+        }
+    }
+    @media screen and (max-width: 640px) {
+        /* Mobile: force wrap version strings */
+        td.version {
+            word-break: break-all;
+            width: 16ch;
+            max-width: 30vw;
+        }
+    }
+
+    td.type {
+        white-space: nowrap;
+    }
+    td.changelog {
+        vertical-align: top;
+
+        * {
+            display: inline;
+            font: inherit;
+            background: inherit;
+            color: inherit;
+        }
+
+        &, p {
+            max-width: 60vw;
+            margin-bottom: 0;  // counter-act <Markdown>
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+    }
+
+    th:last-child,
+    td.changelog:last-child {
+        text-align: left;
+    }
+}
+
+.severity-critical {
+    color: #a30000;
+}
+
+.severity-important {
+    color: #ec7a08;
+}
+
+.severity-low {
+    color: var(--color-subtle-copy);
+}
+
+// backport "pficon-*" for usage on RHEL/CentOS 7
+@font-face {
+    font-family: "pf-symbols";
+    font-style: normal;
+    font-weight: 400;
+    src: url(data:application/x-font-woff;charset=utf-8;base64,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) format("woff");
+
+    unicode-range: U+E946, U+E93A;
+}
+
+.pficon-security:before {
+    content: "\e946";
+    font-family: pf-symbols;
+}
+
+.pficon-enhancement:before {
+    content: "\e93a";
+    font-family: pf-symbols;
+}
+
+div.changelog {
+    max-height: 20em;
+    overflow: auto;
+    white-space: pre-wrap;
+}
+
+tr.security.listing-ct-item {
+
+    &, tbody.open > & {
+        background-color: var(--color-ct-list-critical-bg) !important; /* keep red background when expanded */
+        border-top: 1px solid var(--color-ct-list-critical-border);
+        border-bottom: 1px solid var(--color-ct-list-critical-border);
+
+        &:focus,
+        &:focus-within,
+        &:hover {
+            background-color: var(--color-ct-list-critical-bg-hover) !important;
+            border-top-color: var(--color-ct-list-critical-bg-hover);
+            border-bottom-color: var(--color-ct-list-critical-bg-hover);
+        }
+    }
+
+    @media screen and (min-width: 641px) {
+        td.version:hover .truncating {
+            background: linear-gradient(to left, rgba(251, 240, 240, 0), var(--color-ct-list-critical-bg-hover) 3em);
+        }
+    }
+}
+
+
+/* Hide changelog summaries in narrow widths */
+@media screen and (max-width: 80ch) {
+    .container-fluid {
+        overflow-x: hidden;
+    }
+    table.listing-ct {
+        /* Hide changelog header (there's no class) & data */
+        thead th:last-child,
+        td.changelog {
+            display: none;
+        }
+    }
+}
+/* Remove listing table margins in cramped space (mobile) */
+@media screen and (max-width: 640px) {
+    table.listing-ct {
+        /* counteract .container-fluid */
+        margin-left: -20px;
+        margin-right: -20px;
+
+        /* Mobile mode table should be full width */
+        width: 100vw;
+    }
+    tbody.open > tr.listing-ct-item,
+    tbody.open > tr.listing-ct-panel {
+        border-left: none;
+        border-right: none;
+    }
+}
+
+/* don't let the install progress bar get too wide */
+.progress-main-view {
+    max-width: 60rem;
+    margin: 10ex auto 0;
+}
+
+/* stolen from pkg/systemd/overview.scss */
+.content-header-extra {
+    background: #f5f5f5;
+    border-bottom: 1px solid #ddd;
+    padding: 10px 20px;
+    width: 100%;
+    z-index: 900;
+    top: 0;
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    align-items: center;
+    min-height: 4rem;
+
+    @media screen and (min-width: 640px) {
+        position: sticky;
+    }
+
+    &--state,
+    &--updated {
+        /* Make the height similar to the button (2px padding + 1px border) */
+        padding: 3px 0;
+    }
+
+    &--state {
+        flex: 100 1 auto;
+        padding-right: 1ex;
+    }
+    &--updated {
+        flex: auto;
+    }
+    &--action {
+        text-align: right;
+        padding-left: 1ex;
+    }
+}
+
+/* fixed width to avoid jumpy text between expanded/collapsed */
+.expander-caret {
+    width: 2ex;
+}
+
+.expander-title {
+    margin-bottom: 2em;
+    display: flex;
+    align-items: center;
+    hr {
+        flex: auto;
+    }
+    span {
+        padding: 1ex;
+        flex: none;
+    }
+}
+
+.flow-list-blank-slate {
+    padding-top: 8em;
+    margin: 0 auto;
+    max-width: 69rem;
+    text-align: center;
+}
+
+.flow-list {
+    margin: 1em 1em 3em;
+    padding: 0;
+    max-width: 110rem;
+    text-align: left;
+    box-sizing: border-box;
+
+    li {
+        text-align: left;
+        box-sizing: border-box;
+        width: 22rem;
+        padding: 0 1ex;
+        display: inline-block;
+        overflow: hidden;
+        white-space: nowrap;
+        text-overflow: ellipsis;
+        font-weight: 600;
+    }
+}
+
+.update-log {
+    padding-top: 8em;
+    margin: 0 auto;
+    max-width: 69rem;
+    text-align: center;
+    th {
+        text-align: left;
+        padding-right: 3ex;
+    }
+    td {
+        text-align: left;
+    }
+}
+
+.update-log-content {
+    margin: 0 10ex;
+    height: 13em;
+    overflow-y: auto;
+}
+
+table.header-buttons {
+    margin-bottom: 20px; /* replacement for h2's margin-bottom */
+    td {
+        vertical-align: middle;
+    }
+    h2 {
+        margin: 0 4rem 0 0; /* vertical default ones break vertical alignment */
+    }
+}
+
+.auto-conf {
+    align-items: baseline;
+    display: flex;
+    flex-wrap: wrap;
+    margin: 1em 0 2em;
+    width: 100%;
+
+    /* bootstrap sets widths to 100%, way too wide for Select widgets */
+    .dropdown-toggle {
+        width: auto;
+    }
+    .ct-select,
+    .dropdown {
+        width: auto !important;
+    }
+    .ct-select {
+        margin: 0.5ch;
+    }
+    .dropdown {
+        padding: 0.5ch;
+    }
+}
+.auto-conf-text {
+    padding: 0 1ch;
+}
+.auto-conf-group:first-child > .ct-select {
+    margin-left: 0;
+}
+.auto-conf-group:first-child > .dropdown {
+    padding-left: 0;
+}
+
+/* three columns for auto update hour picker */
+#auto-update-time {
+    ul {
+        width: 25ex;
+    }
+    li {
+        width: 8ex;
+        display: inline-block;
+        text-align: right;
+    }
+}

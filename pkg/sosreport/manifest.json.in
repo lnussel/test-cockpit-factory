@@ -1,0 +1,17 @@
+{
+    "version": "@VERSION@",
+    "requires": {
+	"cockpit": "122"
+    },
+
+    "tools": {
+        "index": {
+            "label": "Diagnostic Reports",
+            "keywords": [
+                {
+                    "matches": ["sos"]
+                }
+            ]
+        }
+    }
+}

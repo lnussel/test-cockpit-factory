@@ -1,0 +1,119 @@
+
+GUIDE_DOCBOOK = doc/guide/cockpit-guide.xml
+
+GUIDE_INCLUDES = \
+	doc/guide/api-cockpit.xml \
+	doc/guide/api-container.xml \
+	doc/guide/api-base1.xml \
+	doc/guide/api-shell.xml \
+	doc/guide/api-system.xml \
+	doc/guide/cockpit-cache.xml \
+	doc/guide/cockpit-channel.xml \
+	doc/guide/cockpit-dbus.xml \
+	doc/guide/cockpit-error.xml \
+	doc/guide/cockpit-file.xml \
+	doc/guide/cockpit-http.xml \
+	doc/guide/cockpit-locale.xml \
+	doc/guide/cockpit-location.xml \
+	doc/guide/cockpit-manifest.xml \
+	doc/guide/cockpit-metrics.xml \
+	doc/guide/cockpit-series.xml \
+	doc/guide/cockpit-session.xml \
+	doc/guide/cockpit-spawn.xml \
+	doc/guide/cockpit-util.xml \
+	doc/guide/authentication.xml \
+	doc/guide/embedding.xml \
+	doc/guide/feature-docker.xml \
+	doc/guide/feature-firewall.xml \
+	doc/guide/feature-journal.xml \
+	doc/guide/feature-machines.xml \
+	doc/guide/feature-networkmanager.xml \
+	doc/guide/feature-packagekit.xml \
+	doc/guide/feature-pcp.xml \
+	doc/guide/feature-realmd.xml \
+	doc/guide/feature-selinux.xml \
+	doc/guide/feature-sosreport.xml \
+	doc/guide/feature-storaged.xml \
+	doc/guide/feature-systemd.xml \
+	doc/guide/feature-terminal.xml \
+	doc/guide/feature-tuned.xml \
+	doc/guide/feature-users.xml \
+	doc/guide/feature-virtualmachines.xml \
+	doc/guide/packages.xml \
+	doc/guide/privileges.xml \
+	doc/guide/https.xml \
+	doc/guide/listen.xml \
+	doc/guide/sso.xml \
+	doc/guide/cert-authentication.xml \
+	doc/guide/startup.xml \
+	doc/guide/urls.xml \
+	$(NULL)
+
+GUIDE_STATIC = \
+	doc/guide/static/home.png \
+	doc/guide/static/gtk-doc.css \
+	doc/guide/static/left.png \
+	doc/guide/static/right.png \
+	doc/guide/static/style.css \
+	doc/guide/static/up.png \
+	$(NULL)
+
+GUIDE_XSLT = \
+	doc/guide/gtk-doc.xsl \
+	doc/guide/version-greater-or-equal.xsl \
+	$(NULL)
+
+GUIDE_FONTS = $(subst dist/static/fonts/,dist/guide/html/,$(REDHATTEXT_FONTS))
+
+EXTRA_DIST += \
+	$(GUIDE_DOCBOOK) \
+	$(GUIDE_INCLUDES) \
+	$(GUIDE_XSLT) \
+	$(GUIDE_FONTS) \
+	$(GUIDE_STATIC) \
+	dist/guide/html \
+	dist/guide/links.html \
+	dist/guide/index.html \
+	doc/guide/directory.html \
+	doc/guide/footer.html \
+	doc/guide/version.in \
+	$(NULL)
+
+noinst_DATA += \
+	dist/guide/html/index.html \
+	dist/guide/index.html
+
+MAINTAINERCLEANFILES += \
+	dist/guide/html/* \
+	dist/guide/links.html \
+	dist/guide/index.html \
+	*.tmp \
+	$(NULL)
+
+dist/guide/html/%.woff2: dist/static/fonts/%.woff2
+	$(COPY_RULE)
+
+dist/guide/html/index.html: $(GUIDE_DOCBOOK) $(GUIDE_INCLUDES) $(man_MANS) $(GUIDE_STATIC) $(GUIDE_XSLT) $(GUIDE_FONTS)
+	$(AM_V_GEN) $(MKDIR_P) dist/guide/html/ && \
+	cp $(addprefix $(srcdir)/,$(GUIDE_STATIC)) dist/guide/html/
+	$(AM_V_GEN) LANG=C.UTF-8 $(XMLTO) html -m $(srcdir)/doc/guide/gtk-doc.xsl -o dist/guide/html/ \
+		--searchpath $(abs_builddir):$(abs_srcdir):$(abs_builddir)/doc/guide \
+		$(srcdir)/$(GUIDE_DOCBOOK)
+	rm -f dist/guide/html/cockpit-guide.proc
+
+dist/guide/html: dist/guide/html/index.html
+
+dist/guide/links.html:
+	$(AM_V_GEN) $(MKDIR_P) $(dir $@) && \
+	(git -C $(srcdir) tag -l '[0-9]*' --sort=-version:refname --format \
+		'<a href="./%(refname:strip=2)/">%(refname:strip=2)</a>' | head -n15 || true) > $@.tmp && \
+	$(MV) $@.tmp $@
+
+dist/guide/index.html: doc/guide/directory.html dist/guide/links.html doc/guide/footer.html
+	$(CAT_RULE)
+
+check-local::
+	if grep -n -r 'name=\"id' dist/guide/html >&2; then \
+		echo "Unexpected generated id in the documentation" >&2; \
+		exit 1; \
+	fi

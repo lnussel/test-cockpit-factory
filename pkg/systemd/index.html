@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Overview</title>
+  <meta name="description" content="">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  <link rel="stylesheet" href="../base1/patternfly.css">
+  <link rel="stylesheet" href="overview.css">
+
+  <script type="text/javascript" src="../base1/cockpit.js"></script>
+  <script type="text/javascript" src="../base1/jquery.js"></script>
+<!--  <script type="text/javascript" src="d3.js"></script> -->
+  <script type="text/javascript" src="overview.js"></script>
+  <script type="text/javascript" src="../*/po.js"></script>
+  <script src="../manifests.js"></script>
+</head>
+<body class="pf-m-redhat-font">
+  <div id="overview"></div>
+
+  <script id="ntp-status-icon-tmpl" type="x-template/mustache">
+    {{#Synched}}
+    <span class="fa fa-lg fa-info-circle"></span>
+    {{/Synched}}
+    {{^Synched}}
+    {{#Server}}
+    <span class="spinner spinner-xs spinner-inline"></span>
+    {{/Server}}
+    {{^Server}}
+    <span class="fa fa-lg fa-exclamation-circle"></span>
+    {{/Server}}
+    {{/Synched}}
+  </script>
+
+  <script id="ntp-status-tmpl" type="x-template/mustache">
+    {{#Synched}}
+    {{#Server}}
+    <div translate="yes">Synchronized with {{Server}}</div>
+    {{/Server}}
+    {{^Server}}
+    <div translate="yes">Synchronized</div>
+    {{/Server}}
+    {{/Synched}}
+    {{^Synched}}
+    {{#Server}}
+    <div translate="yes">Trying to synchronize with {{Server}}</div>
+    {{/Server}}
+    {{^Server}}
+    <div translate="yes">Not synchronized</div>
+    {{#service}}
+    <a role="link" tabindex="0" data-goto-service="{{.}}" class="small-messages" translate>Log messages</a>
+    {{/service}}
+    {{/Server}}
+    {{/Synched}}
+    {{#SubStatus}}
+    <div class="small-messages">{{SubStatus}}</div>
+    {{/SubStatus}}
+  </script>
+
+  <script id="ntp-servers-tmpl" type="x-template/mustache">
+    <div class="systime-inline">
+      {{#NTPServers}}
+      <form class="form-inline">
+        <button data-action="add" data-index="{{index}}" class="pf-c-button pf-m-secondary"><span class="fa fa-plus" /></button>
+        <button data-action="del" data-index="{{index}}" class="pf-c-button pf-m-secondary"><span class="pficon-close" /></button>
+        <div class="form-group">
+          <input type="text" class="form-control" value="{{Value}}" placeholder="{{Placeholder}}">
+        </div>
+      </form>
+      {{/NTPServers}}
+    </div>
+  </script>
+
+  <div class="modal" id="system_information_change_systime" tabindex="-1"
+      role="dialog" data-backdrop="static">
+      <div class="modal-dialog">
+          <div class="modal-content">
+              <div class="modal-header">
+                  <h4 class="modal-title" translate>Change System Time</h4>
+              </div>
+              <div class="modal-body ct-form">
+                  <label for="systime-timezones" class="control-label" for="systime-timezones" translate="yes">Time Zone</label>
+                  <div>
+                      <select class="form-control" id="systime-timezones">
+                      </select>
+                      <div class="has-error">
+                          <span id="systime-timezone-error" class="help-block" translate="yes">Invalid time zone</span>
+                      </div>
+                  </div>
+                  <label class="control-label" for="change_systime"
+                                               translate="yes">Set Time</label>
+                  <div class="btn-group bootstrap-select dropdown form-control" id="change_systime">
+                      <button class="btn btn-default dropdown-toggle" type="button"
+                                                                      data-toggle="dropdown">
+                          <span class="pull-left" translate="yes">Manually</span>
+                          <i class="fa fa-caret-down pf-c-context-selector__toggle-icon" aria-hidden="true"></i>
+                      </button>
+                      <ul class="dropdown-menu">
+                          <li value="manual_time"><a role="link" tabindex="0" translate="yes">Manually</a></li>
+                          <li value="ntp_time"><a role="link" tabindex="0" translate="yes">Automatically using NTP</a></li>
+                          <li value="ntp_time_custom"><a role="link" tabindex="0" translate="yes">Automatically using specific NTP servers</a></li>
+                      </ul>
+                  </div>
+                  <div id="systime-manual-row">
+                      <input type='text' class="form-control" id="systime-date-input"/>
+                      <input type='text' class="form-control" id="systime-time-hours"/>
+                      :
+                      <input type='text' class="form-control" id="systime-time-minutes"/>
+                  </div>
+                  <div id="manual-error-row">
+                    <div class="has-error">
+                      <span id="systime-parse-error" class="help-block"></span>
+                    </div>
+                  </div>
+                  <div id="systime-ntp-servers-row">
+                      <div id="systime-ntp-servers" />
+                      </div>
+                  </div>
+              </div>
+              <div class="modal-footer">
+                  <button class="pf-c-button pf-m-secondary" data-dismiss="modal" translate>Cancel</button>
+                  <button class="pf-c-button pf-m-primary" id="systime-apply-button" translate>Change</button>
+              </div>
+          </div>
+      </div>
+  </div>
+
+  <script id="ssh-host-keys-tmpl" type="x-template/mustache">
+      <div class="list-group dialog-list-ct">
+          {{#keys}}
+              <div class="list-group-item">
+                  <p>{{ title }}</p>
+                  {{#fps}}
+                  <small>{{.}}</small>
+                  {{/fps}}
+              </div>
+          {{/keys}}
+          {{^keys}}
+              <div class="list-group-item">
+                  <p translate="yes">No host keys found.</p>
+              </div>
+          {{/keys}}
+      </div>
+  </script>
+  <div class="modal" id="system_information_ssh_keys" tabindex="-1"
+      role="dialog" data-backdrop="static">
+      <div class="modal-dialog">
+          <div class="modal-content">
+              <div class="modal-header">
+                  <h4 class="modal-title" translate="yes">Machine SSH Key Fingerprints</h4>
+              </div>
+              <div class="modal-body">
+                  <div class="spinner spinner-lg"></div>
+                  <div class="pf-c-alert pf-m-danger pf-m-inline dialog-error" aria-label="inline danger alert" hidden>
+                    <div class="pf-c-alert__icon">
+                      <i class="fa fa-exclamation-circle" aria-hidden="true"></i>
+                    </div>
+                    <h4 class="pf-c-alert__title"></h4>
+                  </div>
+                  <div class="content" hidden></div>
+              </div>
+              <div class="modal-footer">
+                  <button class="pf-c-button pf-m-secondary" data-dismiss="modal" translate>Close</button>
+              </div>
+          </div>
+      </div>
+  </div>
+  <div class="modal" id="shutdown-dialog" tabindex="-1" role="dialog" data-backdrop="static">
+      <div class="modal-dialog">
+          <div class="modal-content">
+              <div class="modal-header">
+                  <h4 class="modal-title"></h4>
+              </div>
+              <div class="modal-body ct-form">
+                  <textarea class="form-control">
+                  </textarea>
+                  <label class="control-label" for="action-delay" translate="yes">Delay</label>
+                  <div role='group' id="action-delay">
+                      <div class="btn-group bootstrap-select dropdown form-control">
+                          <button class="btn btn-default dropdown-toggle" type="button"
+                                                                          data-toggle="dropdown">
+                              <span class="pull-left" translate="yes">1 Minute</span>
+                              <i class="fa fa-caret-down pf-c-context-selector__toggle-icon" aria-hidden="true"></i>
+                          </button>
+                          <ul class="dropdown-menu">
+                              <li value="1"><a role="link" tabindex="0" translate="yes">1 Minute</a></li>
+                              <li value="5"><a role="link" tabindex="0" translate="yes">5 Minutes</a></li>
+                              <li value="20"><a role="link" tabindex="0" translate="yes">20 Minutes</a></li>
+                              <li value="40"><a role="link" tabindex="0" translate="yes">40 Minutes</a></li>
+                              <li value="60"><a role="link" tabindex="0" translate="yes">60 Minutes</a></li>
+                              <li role="separator" class="divider"></li>
+                              <li value="0"><a role="link" tabindex="0" translate="yes">No Delay</a></li>
+                              <li value="x"><a role="link" tabindex="0" translate="yes">Specific Time</a></li>
+                          </ul>
+                      </div>
+                      <div>
+                          <input class="form-control shutdown-date" type="text">
+                          <input class="form-control shutdown-hours" type="text">
+                          :
+                          <input class="form-control shutdown-minutes" type="text">
+                      </div>
+                  </div>
+              </div>
+              <div class="modal-footer">
+                  <button class="pf-c-button pf-m-secondary" translate="yes" data-dismiss="modal">Cancel</button>
+                  <button class="pf-c-button pf-m-danger"></button>
+              </div>
+          </div>
+      </div>
+  </div>
+  <div class="modal" id="system_information_change_hostname" tabindex="-1"
+                                                             role="dialog" data-backdrop="static">
+      <div class="modal-dialog">
+          <div class="modal-content">
+              <div class="modal-header">
+                  <h4 class="modal-title" translate>Change Host Name</h4>
+              </div>
+              <div class="modal-body">
+                  <table class="form-table-ct">
+                      <tr>
+                          <td>
+                              <label class="control-label" for="sich-pretty-hostname"
+                                                           translate="yes">Pretty Host Name</label>
+                          </td>
+                          <td>
+                              <input id="sich-pretty-hostname" class="form-control">
+                          </td>
+                      </tr>
+                      <tr>
+                          <td>
+                              <label class="control-label" for="sich-hostname"
+                                                           translate="yes">Real Host Name</label>
+                          </td>
+                          <td>
+                              <div id=sich-hostname-error>
+                                  <input id="sich-hostname" class="form-control">
+                              </div>
+                          </td>
+                      </tr>
+                      <tr>
+                          <td></td>
+                          <td>
+                              <div class="has-error">
+                                  <span id="sich-note-1" class="help-block"></span>
+                              </div>
+                          </td>
+                      </tr>
+                      <tr>
+                          <td></td>
+                          <td>
+                              <div class="has-error">
+                                  <span id="sich-note-2" class="help-block"></span>
+                              </div>
+                          </td>
+                      </tr>
+                  </table>
+              </div>
+              <div class="modal-footer">
+                  <button class="pf-c-button pf-m-secondary" data-dismiss="modal" translate>Cancel</button>
+                  <button class="pf-c-button pf-m-primary" id="sich-apply-button" translate>Change</button>
+              </div>
+          </div>
+      </div>
+  </div>
+
+  <script src="../performance/performance.js"></script>
+</body>
+</html>
