@@ -211,8 +211,6 @@ struct _CockpitWebService {
   gint callers;
   guint next_internal_id;
 
-  gint credential_requests;
-
   CockpitTransport *transport;
   JsonObject *init_received;
   gulong control_sig;
@@ -384,28 +382,6 @@ process_ping (CockpitWebService *self,
 }
 
 static void
-send_socket_hints (CockpitWebService *self,
-                   const gchar *name,
-                   const gchar *value)
-{
-  CockpitSocket *socket;
-  GHashTableIter iter;
-  GBytes *payload;
-
-  payload = cockpit_transport_build_control ("command", "hint", name, value, NULL);
-  g_hash_table_iter_init (&iter, self->sockets.by_connection);
-  while (g_hash_table_iter_next (&iter, NULL, (gpointer *)&socket))
-    {
-      if (web_socket_connection_get_ready_state (socket->connection) == WEB_SOCKET_STATE_OPEN)
-        {
-              web_socket_connection_send (socket->connection, WEB_SOCKET_DATA_TEXT,
-                                          self->control_prefix, payload);
-        }
-    }
-  g_bytes_unref (payload);
-}
-
-static void
 clear_and_free_string (gpointer data)
 {
   cockpit_memory_clear (data, -1);
@@ -450,22 +426,15 @@ process_socket_authorize (CockpitWebService *self,
     }
   else
     {
-      send_socket_hints (self, "credential",
-                         cockpit_creds_get_password (self->creds) ? "password" : "none");
-      if (self->credential_requests)
-        send_socket_hints (self, "credential", "request");
       goto out;
     }
 
   if (password == NULL)
     {
-      send_socket_hints (self, "credential", "none");
-      self->credential_requests = 0;
       bytes = NULL;
     }
   else
     {
-      send_socket_hints (self, "credential", "password");
       bytes = g_bytes_new_with_free_func (password, strlen (password),
                                           clear_and_free_string, password);
       password = NULL;
@@ -492,7 +461,6 @@ authorize_check_user (CockpitCreds *creds,
 {
   char *subject = NULL;
   gboolean ret = FALSE;
-  gchar *encoded = NULL;
   const gchar *user;
 
   if (!cockpit_authorize_subject (challenge, &subject))
@@ -511,13 +479,24 @@ authorize_check_user (CockpitCreds *creds,
         }
       else
         {
-          encoded = cockpit_hex_encode (user, -1);
+          gchar *encoded = cockpit_hex_encode (user, -1);
           ret = g_str_equal (encoded, subject);
+          g_free (encoded);
+
+          /* domain users are often case insensitive, while NSS/Linux converts them to the canonical lower-case form;
+           * accept the lower-case form of the creds user as well */
+          if (!ret)
+            {
+              gchar *user_lower = g_ascii_strdown (user, -1);
+              encoded = cockpit_hex_encode (user_lower, -1);
+              g_free (user_lower);
+              ret = g_str_equal (encoded, subject);
+              g_free (encoded);
+            }
         }
     }
 
 out:
-  g_free (encoded);
   free (subject);
   return ret;
 }
@@ -562,11 +541,21 @@ process_transport_authorize (CockpitWebService *self,
       data = cockpit_creds_get_password (self->creds);
       if (!data)
         {
-          g_debug ("%s: received \"authorize\" %s \"challenge\", but no password", host, type);
+          g_info ("%s: received \"authorize\" %s \"challenge\", but no password", host, type);
         }
       else if (!g_str_equal ("basic", type) && !authorize_check_user (self->creds, challenge))
         {
-          g_debug ("received \"authorize\" %s \"challenge\", but for wrong user", type);
+          g_info ("received \"authorize\" %s \"challenge\", but for wrong user", type);
+        }
+      else if (g_str_equal ("plain1", type) && g_str_equal (cockpit_creds_get_superuser (self->creds), "none"))
+        {
+          // Older versions of the bridge will send "plain1"
+          // challenges when trying to start a privileged sub-bridge,
+          // but not for anything else.  We use that fact to prevent
+          // them from starting the privileged sub-bridge when the
+          // user has selected that option on the login screen.
+
+          g_info ("received \"plain1\" authorize challenge, but superuser is \"none\"");
         }
       else
         {
@@ -591,13 +580,6 @@ process_transport_authorize (CockpitWebService *self,
         }
     }
 
-  /* Tell the frontend that we're reauthorizing */
-  if (self->init_received)
-    {
-      self->credential_requests++;
-      send_socket_hints (self, "credential", "request");
-    }
-
   if (cookie && !self->sent_done)
     {
       payload = cockpit_transport_build_control ("command", "authorize",
@@ -620,6 +602,9 @@ process_transport_init (CockpitWebService *self,
                         JsonObject *options)
 {
   JsonObject *object;
+  JsonObject *capabilities;
+  gboolean explicit_superuser_capability = FALSE;
+  const gchar *superuser;
   GBytes *payload;
   gint64 version;
 
@@ -636,10 +621,32 @@ process_transport_init (CockpitWebService *self,
         json_object_unref (self->init_received);
       self->init_received = json_object_ref (options);
 
+      if (cockpit_json_get_object (options, "capabilities", NULL, &capabilities) && capabilities)
+        {
+          if (!cockpit_json_get_bool (capabilities, "explicit-superuser", FALSE, &explicit_superuser_capability))
+            g_warning ("invalued 'explicit-superuser' value in init message");
+        }
+
       /* Always send an init message down the new transport */
       object = cockpit_transport_build_json ("command", "init", NULL);
       json_object_set_int_member (object, "version", 1);
       json_object_set_string_member (object, "host", "localhost");
+
+      superuser = cockpit_creds_get_superuser (self->creds);
+      if (superuser && *superuser && !g_str_equal (superuser, "none"))
+        {
+          JsonObject *superuser_options;
+
+          superuser_options = json_object_new ();
+          json_object_set_string_member (superuser_options, "id", superuser);
+          json_object_set_object_member (object, "superuser", superuser_options);
+        }
+      else
+        {
+          json_object_set_boolean_member (object, "superuser", FALSE);
+          cockpit_creds_consume_init_password (self->creds);
+        }
+
       payload = cockpit_json_write_bytes (object);
       json_object_unref (object);
       cockpit_transport_send (transport, NULL, payload);
@@ -683,6 +690,11 @@ on_transport_control (CockpitTransport *transport,
       else if (g_strcmp0 (command, "authorize") == 0)
         {
           valid = process_transport_authorize (self, transport, options);
+        }
+      else if (g_strcmp0 (command, "superuser-init-done") == 0)
+        {
+          cockpit_creds_consume_init_password (self->creds);
+          valid = TRUE;
         }
       else
         {
@@ -913,34 +925,16 @@ process_and_relay_open (CockpitWebService *self,
   return TRUE;
 }
 
-static gboolean
+static void
 process_logout (CockpitWebService *self,
                 JsonObject *options)
 {
-  gboolean disconnect;
-
-  if (!cockpit_json_get_bool (options, "disconnect", FALSE, &disconnect))
-    {
-      g_warning ("received 'logout' command with invalid 'disconnect' field");
-      return FALSE;
-    }
-
   /* Makes the credentials unusable */
   cockpit_creds_poison (self->creds);
 
   /* Destroys our web service, disconnects everything */
-  if (disconnect)
-    {
-      g_info ("Logging out session %s", self->id);
-      g_object_run_dispose (G_OBJECT (self));
-    }
-  else
-    {
-      g_info ("Deauthorizing session %s", self->id);
-    }
-
-  send_socket_hints (self, "credential", "none");
-  return TRUE;
+  g_info ("Logging out session %s", self->id);
+  g_object_run_dispose (G_OBJECT (self));
 }
 
 static const gchar *
@@ -1032,13 +1026,7 @@ dispatch_inbound_command (CockpitWebService *self,
     }
   else if (g_strcmp0 (command, "logout") == 0)
     {
-      valid = process_logout (self, options);
-      if (valid)
-        {
-          /* logout is broadcast to everyone */
-          if (!self->sent_done)
-            cockpit_transport_send (self->transport, NULL, payload);
-        }
+      process_logout (self, options);
     }
   else if (g_strcmp0 (command, "close") == 0)
     {
@@ -1149,10 +1137,6 @@ on_web_socket_open (WebSocketConnection *connection,
 
   web_socket_connection_send (connection, WEB_SOCKET_DATA_TEXT, self->control_prefix, command);
   g_bytes_unref (command);
-
-  /* Do we have an authorize password? if so tell the frontend */
-  if (cockpit_creds_get_password (self->creds))
-    send_socket_hints (self, "credential", "password");
 
   g_signal_connect (connection, "message",
                     G_CALLBACK (on_web_socket_message), self);

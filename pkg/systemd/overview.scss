@@ -9,6 +9,53 @@
   height: 100%;
 }
 
+.ct-limited-access-alert {
+  align-items: center;
+  background: var(--pf-global--active-color--200);
+  margin-bottom: 0;
+  padding: 1rem 1.5rem;
+
+  // Override PF4 spacing to better align to the overview page
+  // and rely on ct-limited-access-alert for padding & alignment
+  &.pf-c-alert.pf-m-info.pf-m-inline {
+    > .pf-c-alert__icon,
+    > .pf-c-alert__title,
+    > .pf-c-alert__action {
+      padding: 0;
+    }
+
+    > .pf-c-alert__icon {
+      // Make the icon slightly darker, to compensate for the background
+      color: var(--pf-global--active-color--400);
+      padding-right: 1rem;
+    }
+  }
+
+  // Remove the left-side stripe
+  &:before {
+    display: none;
+  }
+
+  // Deconstruct nicely on small screen sizes (especially mobile)
+  // This will not be needed in a future PF4 update
+  //
+  // References: 
+  // - https://github.com/cockpit-project/cockpit/issues/14106
+  // - https://github.com/patternfly/patternfly/issues/3125
+  // - https://github.com/patternfly/patternfly/pull/2921
+  //
+  // When we have the upcoming version of PF4 in Cockpit, we should drop this code
+  // (and adjust things for the button to show up on the side of desktop mode instead)
+  @media (max-width: $pf-global--breakpoint--lg) {
+    grid-template-areas: "icon title" ". content" ". action";
+    grid-gap: var(--pf-global--spacer--sm) 0;
+  }
+  @media (max-width: 320px) {
+    // Allow the action button to have a bit more space on iPhone SE sized phones
+    grid-template-areas: "icon title" ". content" "action action";
+  }
+}
+
 .ct-overview-header {
   align-items: center;
   display: flex;
@@ -47,6 +94,10 @@
 
   &-subheading {
     font-size: var(--pf-global--FontSize--md);
+  }
+
+  .fa.fa-lock, .fa.fa-unlock-alt {
+    margin-right: 0.5rem;
   }
 }
 
@@ -264,7 +315,7 @@
 
 .realms-op-wait-message {
   margin-left: 10px;
-  float: left;
+  float: right;
   margin-top: 3px;
 }
 
@@ -321,4 +372,18 @@
 #motd-box > .pf-c-alert {
   /* Spacing between the MOTD is handled by the .pf-l-gallery grid */
   margin-bottom: 0;
+}
+
+.pf-c-alert.no-title h4 {
+    font-weight: normal;
+    color: black;
+    font-family: inherit;
+}
+
+.pf-c-alert.no-title .pf-c-alert__description {
+    padding-bottom: 0px;
+}
+
+.pf-c-alert .pf-c-alert__description a {
+    padding-left: 15px;
 }

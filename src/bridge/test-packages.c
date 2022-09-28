@@ -46,7 +46,7 @@
 #define CHECKSUM_CSP            "80921dc3cde9ff9f2acd2a5851f9b2a3b25ea7b4577128461d9e32fbdd671e16"
 
 /* JSON dict snippet for headers that are present in every request */
-#define STATIC_HEADERS "\"X-DNS-Prefetch-Control\":\"off\",\"Referrer-Policy\":\"no-referrer\",\"X-Content-Type-Options\":\"nosniff\""
+#define STATIC_HEADERS "\"X-DNS-Prefetch-Control\":\"off\",\"Referrer-Policy\":\"no-referrer\",\"X-Content-Type-Options\":\"nosniff\",\"Cross-Origin-Resource-Policy\": \"same-origin\""
 #define STATIC_HEADERS_CACHECONTROL STATIC_HEADERS ",\"Cache-Control\":\"no-cache, no-store\""
 
 extern const gchar **cockpit_bridge_data_dirs;
@@ -949,7 +949,7 @@ test_get_bridges_broken (TestCase *tc,
 
   g_assert (fixture == &fixture_bad_bridges);
 
-  cockpit_expect_message ("missing-match: missing \"match\" field in package manifest");
+  cockpit_expect_message ("missing-match: Exactly one of \"match\" or \"privileged\" required");
   cockpit_expect_message ("broken-problem: invalid \"problem\" field in package manifest");
   cockpit_expect_message ("broken-environ: invalid \"environ\" field in package manifest");
   cockpit_expect_message ("broken-spawn: invalid \"spawn\" field in package manifest");

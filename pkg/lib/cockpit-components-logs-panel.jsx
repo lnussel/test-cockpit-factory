@@ -21,6 +21,8 @@ import cockpit from "cockpit";
 import React from "react";
 
 import { journal } from "journal";
+import "journal.css";
+import "cockpit-components-logs-panel.scss";
 
 const _ = cockpit.gettext;
 
@@ -29,9 +31,22 @@ const _ = cockpit.gettext;
  */
 
 class JournalOutput {
-    constructor() {
+    constructor(search_options) {
         this.logs = [];
         this.reboot_key = 0;
+        this.search_options = search_options || {};
+    }
+
+    onEvent(ev, cursor) {
+        // only consider primary mouse button for clicks
+        if (ev.type === 'click' && ev.button !== 0)
+            return;
+
+        // only consider enter button for keyboard events
+        if (ev.type === 'keypress' && ev.key !== "Enter")
+            return;
+
+        cockpit.jump("system/logs#/" + cursor + "?parent_options=" + JSON.stringify(this.search_options));
     }
 
     render_line(ident, prio, message, count, time, entry) {
@@ -46,7 +61,9 @@ class JournalOutput {
         }
 
         return (
-            <div className="cockpit-logline" role="row" key={entry.__MONOTONIC_TIMESTAMP}>
+            <div className="cockpit-logline" role="row" tabIndex="0" key={entry.__CURSOR}
+                onClick={ev => this.onEvent(ev, entry.__CURSOR)}
+                onKeyPress={ev => this.onEvent(ev, entry.__CURSOR)}>
                 <div className="cockpit-log-warning" role="cell">
                     { warning
                         ? <i className="fa fa-exclamation-triangle" />
@@ -94,7 +111,7 @@ class JournalOutput {
 
     limit(max) {
         if (this.logs.length > max)
-            this.logs = this.logs.slice(-max);
+            this.logs = this.logs.slice(0, max);
     }
 }
 
@@ -107,14 +124,16 @@ export class LogsPanel extends React.Component {
     componentDidMount() {
         this.journalctl = journal.journalctl(this.props.match, { count: this.props.max });
 
-        var out = new JournalOutput();
+        var out = new JournalOutput(this.props.search_options);
         var render = journal.renderer(out);
 
         this.journalctl.stream((entries) => {
             for (var i = 0; i < entries.length; i++)
                 render.prepend(entries[i]);
             render.prepend_flush();
-            out.limit(this.props.max);
+            // "max + 1" since there is always a date header and we
+            // want to show "max" entries below it.
+            out.limit(this.props.max + 1);
             this.setState({ logs: out.logs });
         });
     }
@@ -123,17 +142,20 @@ export class LogsPanel extends React.Component {
         this.journalctl.stop();
     }
 
-    // TODO: refactor, the state object can't store neither functions nor React components
-    // Better approach: store just data to the component's state and render rows directly in the render() method
-    // Do not use helper functions (the "render_*" above) to generate elements but make components from them (start with CapitalLetter)
     render() {
         return (
             <div className="panel panel-default cockpit-log-panel" role="table">
-                <div className="panel-heading">{this.props.title}</div>
-                <div className="panel-body" role="rowgroup">
-                    { this.state.logs }
+                <div className="panel-heading">
+                    <h2 className="panel-title">{this.props.title}</h2>
+                    { this.props.goto_url && <button className="link-button" role="link" onClick={e => cockpit.jump(this.props.goto_url)}>{_("All logs")}</button> }
+                </div>
+                <div className={"panel-body " + ((!this.state.logs.length && this.props.emptyMessage.length) ? "empty-message" : "")} role="rowgroup">
+                    { this.state.logs.length ? this.state.logs : this.props.emptyMessage }
                 </div>
             </div>
         );
     }
 }
+LogsPanel.defaultProps = {
+    emptyMessage: [],
+};

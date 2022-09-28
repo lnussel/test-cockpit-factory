@@ -17,6 +17,9 @@
  * along with Cockpit; If not, see <http://www.gnu.org/licenses/>.
  */
 
+import '../../src/base1/patternfly-cockpit.scss';
+import 'polyfills'; // once per application
+
 import cockpit from "cockpit";
 
 import React from "react";
@@ -24,6 +27,9 @@ import ReactDOM from "react-dom";
 
 import { KdumpPage } from "./kdump-view.jsx";
 import * as kdumpClient from "./kdump-client.js";
+import { superuser } from "superuser";
+
+superuser.reload_page_on_change();
 
 var initStore = function(rootElement) {
     var dataStore = { };

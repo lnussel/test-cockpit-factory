@@ -19,8 +19,8 @@
 
 import React from 'react';
 import PropTypes from 'prop-types';
-import { Modal, OverlayTrigger, Tooltip } from 'patternfly-react';
-import { Button } from '@patternfly/react-core';
+import { Modal } from 'patternfly-react';
+import { Button, Tooltip } from '@patternfly/react-core';
 import cockpit from 'cockpit';
 
 import { ModalError } from 'cockpit-components-inline-notification.jsx';
@@ -89,13 +89,13 @@ class CreateStorageVolumeModal extends React.Component {
                 </Modal.Body>
                 <Modal.Footer>
                     {this.state.dialogError && <ModalError dialogError={this.state.dialogError} dialogErrorDetail={this.state.dialogErrorDetail} />}
-                    {this.state.createInProgress && <div className="spinner spinner-sm pull-left" />}
-                    <Button variant='secondary' className='btn-cancel' onClick={ this.props.close }>
-                        {_("Cancel")}
-                    </Button>
                     <Button variant="primary" onClick={this.onCreateClicked} isDisabled={this.state.createInProgress}>
                         {_("Create")}
                     </Button>
+                    <Button variant='link' className='btn-cancel' onClick={ this.props.close }>
+                        {_("Cancel")}
+                    </Button>
+                    {this.state.createInProgress && <div className="spinner spinner-sm pull-right" />}
                 </Modal.Footer>
             </Modal>
         );
@@ -123,7 +123,7 @@ export class StorageVolumeCreate extends React.Component {
     }
 
     render() {
-        const idPrefix = `create-volume`;
+        const idPrefix = `${this.props.storagePool.name}-${this.props.storagePool.connectionName}-create-volume`;
         const poolTypesNotSupportingVolumeCreation = ['iscsi', 'iscsi-direct', 'gluster', 'mpath'];
 
         const createButton = () => {
@@ -138,19 +138,16 @@ export class StorageVolumeCreate extends React.Component {
                 );
             } else {
                 return (
-                    <OverlayTrigger overlay={
-                        <Tooltip id='create-tooltip'>
-                            {_("Pool type doesn't support volume creation")}
-                        </Tooltip> } placement='top'>
+                    <Tooltip id='create-tooltip'
+                             content={_("Pool type doesn't support volume creation")}>
                         <span>
                             <Button id={`${idPrefix}-button`}
-                                variant='secondary'
-                                style={{ pointerEvents: 'none' }}
-                                isDisabled>
+                                    variant='secondary'
+                                    isDisabled>
                                 {_("Create Volume")}
                             </Button>
                         </span>
-                    </OverlayTrigger>
+                    </Tooltip>
                 );
             }
         };
@@ -160,7 +157,7 @@ export class StorageVolumeCreate extends React.Component {
                 { createButton() }
                 { this.state.showModal &&
                 <CreateStorageVolumeModal
-                    idPrefix={idPrefix}
+                    idPrefix="create-volume"
                     storagePool={this.props.storagePool}
                     close={this.close} /> }
             </>

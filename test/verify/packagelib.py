@@ -25,7 +25,7 @@ class PackageCase(MachineCase):
     def setUp(self):
         super().setUp()
 
-        self.repo_dir = "/var/tmp/repo"
+        self.repo_dir = os.path.join(self.vm_tmpdir, "repo")
 
         if self.machine.ostree_image:
             warnings.warn("PackageCase: OSTree images can't install additional packages")
@@ -58,25 +58,14 @@ class PackageCase(MachineCase):
 
         # disable all existing repositories to avoid hitting the network
         if self.backend == "apt":
-            self.machine.execute("""
-                mv /etc/apt/sources.list.d /etc/apt/sources.list.d.test;
-                mkdir -p /etc/apt/sources.list.d;
-                mv /etc/apt/sources.list /etc/apt/sources.list.test;
-                touch /etc/apt/sources.list;
-                apt-get update""")
-
-            self.addCleanup(self.machine.execute, """
-                rm -rf /etc/apt/sources.list.d;
-                mv /etc/apt/sources.list.d.test /etc/apt/sources.list.d;
-                mv /etc/apt/sources.list.test /etc/apt/sources.list""")
+            self.restore_dir("/var/lib/apt", reboot_safe=True)
+            self.restore_dir("/var/cache/apt", reboot_safe=True)
+            self.restore_dir("/etc/apt", reboot_safe=True)
+            self.machine.execute("echo > /etc/apt/sources.list && rm -f /etc/apt/sources.list.d/* && apt-get clean && apt-get update")
         else:
-            self.machine.execute("""
-                mv /etc/yum.repos.d /etc/yum.repos.d.test;
-                mkdir -p /etc/yum.repos.d;
-                rm -rf /var/cache/yum/* /var/cache/dnf/*""")
-            self.addCleanup(self.machine.execute, """
-                rm -rf /etc/yum.repos.d;
-                mv /etc/yum.repos.d.test /etc/yum.repos.d""")
+            self.restore_dir("/etc/yum.repos.d", reboot_safe=True)
+            self.restore_dir("/var/cache/dnf", reboot_safe=True)
+            self.machine.execute("rm -rf /etc/yum.repos.d/* /var/cache/yum/* /var/cache/dnf/*")
 
         # have PackageKit start from a clean slate
         self.machine.execute("systemctl kill --signal=SIGKILL packagekit; rm -rf /var/cache/PackageKit")
@@ -270,8 +259,10 @@ rm -rf ~/rpmbuild
                                     xz -c Packages > Packages.xz
                                     O=$(apt-ftparchive -o APT::FTPArchive::Release::Origin=cockpittest release .); echo "$O" > Release
                                     echo 'Changelogs: http://localhost:12345/changelogs/@CHANGEPATH@' >> Release
-                                    setsid python3 -m http.server 12345 >/dev/null 2>&1 < /dev/null &
                                     '''.format(self.repo_dir))
+            pid = self.machine.spawn("cd %s && exec python3 -m http.server 12345" % self.repo_dir, "changelog")
+            # pid will not be present for rebooting tests
+            self.addCleanup(self.machine.execute, "kill %i || true" % pid)
             self.machine.wait_for_cockpit_running(port=12345)  # wait for changelog HTTP server to start up
         else:
             self.machine.execute('''set -e; printf '[updates]\nname=cockpittest\nbaseurl=file://{0}\nenabled=1\ngpgcheck=0\n' > /etc/yum.repos.d/cockpittest.repo

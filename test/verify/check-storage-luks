@@ -22,7 +22,7 @@ from storagelib import *
 from testlib import *
 
 
-class TestStorage(StorageCase):
+class TestStorageLuks(StorageCase):
 
     def testLuks(self):
         self.allow_journal_messages("Device is not initialized.*", ".*could not be opened.")
@@ -121,7 +121,14 @@ class TestStorage(StorageCase):
         assert m.execute("grep -v ^# /etc/crypttab || true").strip() == ""
         assert m.execute("grep %s /etc/fstab || true" % mount_point_secret) == ""
 
-    @skipImage("No clevis/tang", "debian-stable", "debian-testing", "ubuntu-1804", "ubuntu-2004", "ubuntu-stable")
+        # luksmeta-monitor-hack.py might leave a udevadm process
+        # behind, so let's check that the session goes away cleanly
+        # after a logout.
+
+        b.logout()
+        wait(lambda: m.execute("(loginctl list-users | grep admin) || true") == "")
+
+    @skipImage("No clevis/tang", "debian-stable", "debian-testing", "ubuntu-2004", "ubuntu-stable")
     def testClevisTang(self):
         m = self.machine
         b = self.browser
@@ -145,7 +152,7 @@ class TestStorage(StorageCase):
         #        background, and it's not reliable either.
         #
         #        https://github.com/latchset/tang/issues/23
-        if m.image not in ["rhel-8-2", "rhel-8-2-distropkg"]:
+        if m.image not in ["rhel-8-3", "rhel-8-3-distropkg", "centos-8-stream"]:
             m.execute("systemctl reset-failed tangd-update; systemctl restart tangd-update")
 
         m.execute("systemctl start tangd.socket")
@@ -221,13 +228,13 @@ class TestStorage(StorageCase):
         self.confirm()
         b.wait_not_present(panel + ".table tr:nth-child(2)")
 
-    @skipImage("No clevis/tang", "debian-stable", "debian-testing", "ubuntu-1804", "ubuntu-2004", "ubuntu-stable")
+    @skipImage("No clevis/tang", "debian-stable", "debian-testing", "ubuntu-2004", "ubuntu-stable")
     def testSlots(self):
         self.allow_journal_messages("Device is not initialized.*", ".*could not be opened.")
         m = self.machine
         b = self.browser
 
-        luks_2 = m.image in ["rhel-8-2", "rhel-8-2-distropkg", "centos-8-stream"]
+        luks_2 = m.image in ["rhel-8-3", "rhel-8-3-distropkg", "centos-8-stream"]
         error_base = "Error unlocking /dev/sda: Failed to activate device: "
         error_messages = [error_base + "Operation not permitted",
                           error_base + "Incorrect passphrase."]

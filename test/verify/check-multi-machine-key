@@ -22,7 +22,7 @@ import subprocess
 
 import parent
 from testlib import *
-from hacklib import *
+from machine_core.constants import TEST_OS_DEFAULT
 
 
 def kill_user_admin(machine):
@@ -101,11 +101,17 @@ class TestMultiMachineKeyAuth(MachineCase):
         self.machine2.disconnect()
         self.machine2.execute("useradd user -c 'User' || true", direct=True)
         self.machine2.execute(
-            "sed -i 's/.*PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config", direct=True)
+            "sed -i 's/.*PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config $(ls /etc/ssh/sshd_config.d/* 2>/dev/null || true)", direct=True)
         self.machine2.execute(
             "( ! systemctl is-active sshd.socket || systemctl stop sshd.socket) && systemctl restart sshd.service", direct=True)
         self.machine2.wait_execute()
-        HACK_disable_problematic_preloads(self.machine2)
+
+        # Disable preloading on all machines ("machine1" is done in testlib.py)
+        # Preloading on machines with debug build can overload the browser and cause slowness and browser crashes
+        # In these tests we actually switch between machines in quick succession which can make things even worse
+        if self.machine.image == TEST_OS_DEFAULT:
+            self.machines["machine2"].write("/usr/share/cockpit/packagekit/override.json", '{ "preload": [ ] }')
+            self.machines["machine2"].write("/usr/share/cockpit/systemd/override.json", '{ "preload": [ ] }')
 
     # Possible workaround - ssh as `admin` and just do `m.execute()`
     @skipBrowser("Firefox cannot do `cockpit.spawn`", "firefox")
@@ -255,7 +261,6 @@ class TestMultiMachineKeyAuth(MachineCase):
 
     # Possible workaround - ssh as `admin` and just do `m.execute()`
     @skipBrowser("Firefox cannot do `cockpit.spawn`", "firefox")
-    @skipImage("Newer version (>= 0.8.5) of libssh required", "ubuntu-1804")
     def testLockedIdentity(self):
         b = self.browser
         m1 = self.machine

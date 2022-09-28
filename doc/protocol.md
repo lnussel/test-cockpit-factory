@@ -85,6 +85,7 @@ The following fields are defined:
  * "csrf-token": The web service will send a csrf-token for external channels.
  * "os-release": The bridge sends fields from /etc/os-release which identify the system.
  * "packages": The bridge sends a list of package names on the system.
+ * "superuser": Instructs a bridge about whether and how to start a superuser bridge.
 
 If a problem occurs that requires shutdown of a transport, then the "problem"
 field can be set to indicate why the shutdown will be shortly occurring.
@@ -370,22 +371,12 @@ If no fields are specified then all channels are terminated.
 Command: logout
 ---------------
 
-The "logout" command is sent by the shell to cockpit-ws. It discards credentials
-for the logged in user. Optionally it disconnects the user.
+The "logout" command is sent by the shell to cockpit-ws. It
+disconnects the user.
 
-The following fields are defined:
-
- * "disconnect": if set to true then disconnect the user
-
-Example logout message:
-
-    {
-        "command": "logout",
-        "disconnect": true
-    }
-
-The "logout" command is broadcast to all bridge instances.
-
+In older versions, the "logout" command was broadcast to all bridges
+and used to terminate privileged ones.  Privileged bridges are now
+terminated by closing their transport.
 
 Command: hint
 -------------

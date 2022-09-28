@@ -37,10 +37,9 @@ def add_machine(b, address):
     b.wait_popup('dashboard_setup_server_dialog')
     b.set_val('#add-machine-address', address)
 
-    b.wait_text('#dashboard_setup_server_dialog button:nth-of-type(2)', "Add")
-    b.click('#dashboard_setup_server_dialog button:nth-of-type(2)')
+    b.click('#dashboard_setup_server_dialog .modal-footer button:contains(Add)')
     b.wait_in_text('#dashboard_setup_server_dialog', "Fingerprint")
-    b.click('#dashboard_setup_server_dialog button:nth-of-type(2)')
+    b.click('#dashboard_setup_server_dialog .modal-footer button:contains(Connect)')
     b.wait_popdown('dashboard_setup_server_dialog')
 
 
@@ -51,7 +50,8 @@ class TestMultiOS(MachineCase):
     }
 
     def check_spawn(self, b, address):
-        # Firefox cannot do `cockpit.spawn` as it returns promise
+        # HACK: Firefox cannot do `cockpit.spawn` as it returns promise
+        # Firefox can wait for promise to resolve, but then cannot get value from it
         if b.cdp.browser == "firefox":
             return
         result = b.call_js_func("""(function(address) {
@@ -60,6 +60,9 @@ class TestMultiOS(MachineCase):
         self.assertEqual(result, "hi\n")
 
     def check_dbus(self, b, address):
+        # HACK: Firefox cannot do `cockpit.dbus.proxy.call` as it returns promise
+        if b.cdp.browser == "firefox":
+            return
         b.call_js_func("""(function(address) {
             return cockpit.dbus("org.freedesktop.DBus", { host: address })
                 .proxy("org.freedesktop.DBus", "/").call("GetId");
@@ -151,7 +154,6 @@ class TestMultiOSDirect(MachineCase):
         dev_dashboard_addresses = ["localhost"]
         wait_dashboard_addresses(b, dev_dashboard_addresses)
 
-        dev_m = self.machine
         stock_m = self.machines['centos-7']
         stock_m.execute("hostnamectl set-hostname stock")
 
@@ -177,12 +179,6 @@ class TestMultiOSDirect(MachineCase):
         b.wait_visible("body")
         b.wait_in_text('#system_information_hostname_button', "stock")
         b.switch_to_top()
-
-        # Debian/Ubuntu don't ship CentOS branding
-        if "debian" in dev_m.image or "ubuntu" in dev_m.image:
-            b.wait_in_text("#index-brand", "Cockpit")
-        else:
-            b.wait_in_text("#index-brand", "CentOS")
 
         b.wait_js_cond('window.location.pathname == "/=10.111.113.5/system"')
 

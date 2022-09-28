@@ -56,6 +56,7 @@ export var journal = { };
  *  * "until": if specified list entries until the date/time
  *  * "cursor": a cursor to start listing entries from
  *  * "after": a cursor to start listing entries after
+ *  * "priority": if specified list entries below the specific priority, inclusive
  *
  * Returns a jQuery deferred promise. You can call these
  * functions on the deferred to handle the responses. Note that
@@ -120,6 +121,10 @@ journal.build_cmd = function build_cmd(/* ... */) {
         cmd.push("--cursor=" + options.cursor);
     if (options.after)
         cmd.push("--after=" + options.after);
+    if (options.priority)
+        cmd.push("--priority=" + options.priority);
+    if (options.grep)
+        cmd.push("--grep=" + options.grep);
 
     /* journalctl doesn't allow reverse and follow together */
     if (options.reverse)
@@ -529,9 +534,25 @@ journal.renderer = function renderer(funcs_or_box) {
     };
 };
 
-journal.logbox = function logbox(match, max_entries) {
+journal.logbox = function logbox(match, max_entries, search_options) {
     var entries = [];
     var box = document.createElement("div");
+    box.addEventListener("click", goto_log);
+    box.addEventListener("keypress", goto_log);
+
+    function goto_log(ev) {
+        // only consider primary mouse button for clicks
+        if (ev.type === 'click' && ev.button !== 0)
+            return;
+
+        // only consider enter button for keyboard events
+        if (ev.type === 'keypress' && ev.key !== "Enter")
+            return;
+
+        const cursor = ev.target.closest(".cockpit-logline").getAttribute("data-cursor");
+        if (cursor)
+            cockpit.jump("system/logs#/" + cursor + "?parent_options=" + JSON.stringify(search_options || {}));
+    }
 
     function render() {
         var renderer = journal.renderer(box);

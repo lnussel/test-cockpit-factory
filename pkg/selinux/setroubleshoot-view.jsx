@@ -63,7 +63,7 @@ class SELinuxEventDetails extends React.Component {
         }
         var localId = this.props.details.localId;
         var analysisId = this.props.details.pluginAnalysis[itmIdx].analysisId;
-        this.props.runFix(localId, analysisId, runCommand);
+        this.props.runFix(localId, analysisId, itmIdx, runCommand);
     }
 
     render() {
@@ -90,31 +90,31 @@ class SELinuxEventDetails extends React.Component {
             }
 
             if (fixable) {
-                if ((self.props.fix) && (self.props.fix.plugin == itm.analysisId)) {
-                    if (self.props.fix.running) {
+                if ((itm.fix) && (itm.fix.plugin == itm.analysisId)) {
+                    if (itm.fix.running) {
                         msg = (
                             <div>
-                                <div className="spinner setroubleshoot-progress-spinner" />
+                                <div className="spinner spinner-xs setroubleshoot-progress-spinner" />
                                 <span className="setroubleshoot-progress-message"> { _("Applying solution...") }</span>
                             </div>
                         );
                     } else {
-                        if (self.props.fix.success) {
+                        if (itm.fix.success) {
                             msg = (
                                 <Alert isInline variant="success" title={ _("Solution applied successfully") }>
-                                    {self.props.fix.result}
+                                    {itm.fix.result}
                                 </Alert>
                             );
                         } else {
                             msg = (
                                 <Alert isInline variant="danger" title={ _("Solution failed") }>
-                                    {self.props.fix.result}
+                                    {itm.fix.result}
                                 </Alert>
                             );
                         }
                     }
                 }
-                if (!self.props.fix) {
+                if (!itm.fix) {
                     fixit = (
                         <div className="setroubleshoot-listing-action">
                             <Button variant="secondary" onClick={ self.runFix.bind(self, itmIdx, fixit_command) }>
@@ -130,14 +130,44 @@ class SELinuxEventDetails extends React.Component {
                     </div>
                 );
             }
+
+            // Formatted solution
+            let doElement = "";
+
+            // One line usually means one command
+            if (itm.doText && itm.doText.indexOf("\n") < 0)
+                doElement = <pre>{itm.doText}</pre>;
+
+            // There can be text with commands. Command always starts on a new line with '#'
+            // Group subsequent commands into one `<pre>` element.
+            if (itm.doText && itm.doText.indexOf("\n") >= 0) {
+                const parts = [];
+                const lines = itm.doText.split("\n");
+                let lastCommand = false;
+                lines.forEach(l => {
+                    if (l[0] == "#") { // command
+                        if (lastCommand) // When appending command remove "# ". Only the first command keeps it and it is removed later on
+                            parts[parts.length - 1] += ("\n" + l.substr(2));
+                        else
+                            parts.push(l);
+                        lastCommand = true;
+                    } else {
+                        parts.push(l);
+                        lastCommand = false;
+                    }
+                });
+                doElement = parts.map(p => p[0] == "#" ? <pre key={p}>{p.substr(2)}</pre> : <span key={p}>{p}</span>);
+            }
+
             var detailsLink = <Button variant="link" isInline onClick={ self.handleSolutionDetailsClick.bind(self, itmIdx) }>{ _("solution details") }</Button>;
             var doState;
             var doElem;
             var caret;
+
             if (self.state.solutionExpanded[itmIdx]) {
                 caret = <i className="fa fa-angle-down" />;
                 doState = <div>{caret} {detailsLink}</div>;
-                doElem = <div>{itm.doText}</div>;
+                doElem = doElement;
             } else {
                 caret = <i className="fa fa-angle-right" />;
                 doState = <div>{caret} {detailsLink}</div>;

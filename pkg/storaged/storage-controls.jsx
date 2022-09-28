@@ -18,8 +18,7 @@
  */
 
 import React from "react";
-import { OverlayTrigger, Tooltip } from "patternfly-react";
-import { Button, Progress, ProgressMeasureLocation, ProgressVariant } from '@patternfly/react-core';
+import { Button, Tooltip, TooltipPosition, Progress, ProgressMeasureLocation, ProgressVariant } from '@patternfly/react-core';
 import { BarsIcon } from '@patternfly/react-icons';
 
 import cockpit from "cockpit";
@@ -37,7 +36,7 @@ const _ = cockpit.gettext;
  *                  a privileged action.
  *
  * It can be disabled and will show a tooltip then.  It will
- * automatically disable itself when the logged in user doesn't
+ * automatically disappear when the logged in user doesn't
  * have permission.
  *
  * Properties:
@@ -49,22 +48,17 @@ const _ = cockpit.gettext;
 class StorageControl extends React.Component {
     render() {
         var excuse = this.props.excuse;
-        if (!client.permission.allowed) {
-            var markup = {
-                __html: cockpit.format(_("The user <b>$0</b> is not permitted to manage storage"),
-                                       client.permission.user ? client.permission.user.name : '')
-            };
-            excuse = <span dangerouslySetInnerHTML={markup} />;
-        }
+        if (!client.superuser.allowed)
+            return <div />;
 
         if (excuse) {
             return (
-                <OverlayTrigger overlay={ <Tooltip id="tip-storage">{excuse}</Tooltip> }
-                                placement={this.props.excuse_placement || "top"}>
+                <Tooltip id="tip-storage" content={excuse}
+                         position={this.props.excuse_placement || TooltipPosition.top}>
                     <span>
                         { this.props.content(excuse) }
                     </span>
-                </OverlayTrigger>
+                </Tooltip>
             );
         } else {
             return this.props.content();
@@ -74,9 +68,17 @@ class StorageControl extends React.Component {
 
 function checked(callback) {
     return function (event) {
-        // only consider primary mouse button
-        if (!event || event.button !== 0)
+        if (!event)
             return;
+
+        // only consider primary mouse button for clicks
+        if (event.type === 'click' && event.button !== 0)
+            return;
+
+        // only consider enter button for keyboard events
+        if (event.type === 'keypress' && event.key !== "Enter")
+            return;
+
         var promise = client.run(callback);
         if (promise)
             promise.fail(function (error) {
@@ -203,7 +205,7 @@ export const StorageUsageBar = ({ stats, critical }) => {
 };
 
 export const StorageMenuItem = ({ onClick, children }) => (
-    <li><a onClick={checked(onClick)}>{children}</a></li>
+    <li><a role="link" tabIndex="0" onKeyPress={checked(onClick)} onClick={checked(onClick)}>{children}</a></li>
 );
 
 export const StorageBarMenu = ({ label, children }) => {

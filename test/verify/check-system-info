@@ -17,7 +17,6 @@
 # You should have received a copy of the GNU Lesser General Public License
 # along with Cockpit; If not, see <http://www.gnu.org/licenses/>.
 
-import subprocess
 import time
 
 import parent
@@ -97,11 +96,14 @@ class TestSystemInfo(MachineCase):
     def setUp(self):
         super().setUp()
 
-        # Debian will not allow timesyncd to start if any other NTP packge is installed
-        # We only support timesyncd for NTP configuration, so make sure chrony
-        # is not installed in the debian test images
-        if self.machine.image in ["debian-stable", "debian-testing", "ubuntu-stable"]:
+        # Debian will not allow timesyncd to start if any other NTP packge is installed We only
+        # support timesyncd for NTP configuration, so make sure chrony is not installed in the older
+        # debian/ubuntu images which don't yet have systemd-timesyncd
+        if self.machine.image in ["debian-stable", "ubuntu-stable"]:
             self.machine.execute("dpkg --remove chrony");
+
+        # Most OSes don't set nosmt by default, but there are some exceptions
+        self.expect_smt_default = self.machine.image in ["fedora-coreos"]
 
     @enableAxe
     def testBasic(self):
@@ -137,23 +139,10 @@ class TestSystemInfo(MachineCase):
         m.execute("chmod 600 /etc/ssh/weirdname")
         m.execute("restorecon /etc/ssh/weirdname || true")
 
-        supports_alt = False
-        try:
-            m.execute(command="ssh-keygen -l -f /etc/ssh/weirdname -E md5", quiet=True)
-            supports_alt = True
-        except subprocess.CalledProcessError:
-            pass
-
-        if supports_alt:
-            new_default = m.execute("ssh-keygen -l -f /etc/ssh/weirdname -E md5 | cut -d' ' -f2")
-            new_alt = m.execute("ssh-keygen -l -f /etc/ssh/weirdname -E sha256 | cut -d' ' -f2")
-            old_default = m.execute("ssh-keygen -l -f /etc/ssh/ssh_host_rsa_key -E md5 | cut -d' ' -f2")
-            old_alt = m.execute("ssh-keygen -l -f /etc/ssh/ssh_host_rsa_key -E sha256 | cut -d' ' -f2")
-        else:
-            new_default = m.execute("ssh-keygen -l -f /etc/ssh/weirdname | cut -d' ' -f2")
-            new_alt = None
-            old_default = m.execute("ssh-keygen -l -f /etc/ssh/ssh_host_rsa_key | cut -d' ' -f2")
-            old_alt = None
+        new_default = m.execute("ssh-keygen -l -f /etc/ssh/weirdname -E md5 | cut -d' ' -f2")
+        new_alt = m.execute("ssh-keygen -l -f /etc/ssh/weirdname -E sha256 | cut -d' ' -f2")
+        old_default = m.execute("ssh-keygen -l -f /etc/ssh/ssh_host_rsa_key -E md5 | cut -d' ' -f2")
+        old_alt = m.execute("ssh-keygen -l -f /etc/ssh/ssh_host_rsa_key -E sha256 | cut -d' ' -f2")
 
         b.click("#system-ssh-keys-link")
         b.wait_popup("system_information_ssh_keys")
@@ -164,9 +153,8 @@ class TestSystemInfo(MachineCase):
         b.wait_in_text("#system_information_ssh_keys .list-group", "ECDSA")
         b.wait_not_in_text("#system_information_ssh_keys .list-group", new_default)
         b.wait_in_text("#system_information_ssh_keys .list-group", old_default)
-        if supports_alt:
-            b.wait_not_in_text("#system_information_ssh_keys .list-group", new_alt)
-            b.wait_in_text("#system_information_ssh_keys .list-group", old_alt)
+        b.wait_not_in_text("#system_information_ssh_keys .list-group", new_alt)
+        b.wait_in_text("#system_information_ssh_keys .list-group", old_alt)
 
         b.click("#system_information_ssh_keys button")
         b.wait_popdown("system_information_ssh_keys")
@@ -186,9 +174,8 @@ class TestSystemInfo(MachineCase):
         b.wait_not_in_text("#system_information_ssh_keys .list-group", "ECDSA")
         b.wait_in_text("#system_information_ssh_keys .list-group", new_default)
         b.wait_not_in_text("#system_information_ssh_keys .list-group", old_default)
-        if supports_alt:
-            b.wait_not_in_text("#system_information_ssh_keys .list-group", old_alt)
-            b.wait_in_text("#system_information_ssh_keys .list-group", new_alt)
+        b.wait_not_in_text("#system_information_ssh_keys .list-group", old_alt)
+        b.wait_in_text("#system_information_ssh_keys .list-group", new_alt)
 
         b.wait_in_text('#system_information_os_text',
                     "Foobar Adventure Linux Server 2.0 (Day of Doom)")
@@ -213,7 +200,30 @@ class TestSystemInfo(MachineCase):
         self.login_and_go("/system")
         b.wait_text('#system_machine_id', mid)
 
-        self.allow_journal_messages("error loading contents of os-release: .*")
+        # uptime (introduced in PR #13885)
+        b.wait_text_not("#system_uptime", "")
+        # replace it with a known value, it should automatically update every minute
+        m.write("/tmp/fake_uptime", "2000.12 12345.30\n")
+        m.execute("mount -o bind /tmp/fake_uptime /proc/uptime")
+        self.addCleanup(m.execute, "umount /proc/uptime")
+        with b.wait_timeout(70):
+            b.wait_text("#system_uptime", "33 minutes")
+        # 4 months and a bit, moment humanize() rounds quite aggressively; also, test a slightly different format
+        m.write("/tmp/fake_uptime", "10370000 12345.30\n")
+        with b.wait_timeout(70):
+            b.wait_text("#system_uptime", "4 months")
+
+        self.allow_journal_messages("error loading contents of os-release: .*",
+                                    "sudo: unable to resolve host host1.cockpit.lan: .*")
+
+    def set_change_time_dialog_mode(self, mode):
+        b = self.browser
+        b.click("#system_information_change_systime label:contains('Set Time') + div button")
+        if self.machine.image != "rhel-8-3-distropkg":
+            b.click("#system_information_change_systime label:contains('Set Time') + div ul button:contains('%s')" % mode)
+        else:
+            b.click("#system_information_change_systime label:contains('Set Time') + div ul a:contains('%s')" % mode)
+        b.wait_in_text("#system_information_change_systime label:contains('Set Time') + div button", mode)
 
     def testTime(self):
         m = self.machine
@@ -232,27 +242,33 @@ class TestSystemInfo(MachineCase):
         self.allow_journal_messages(
             "org.freedesktop.systemd1: couldn't get property org.freedesktop.systemd1.Service ExecMain at /org/freedesktop/systemd1/unit/systemd_2dtimedated_2eservice: GDBus.Error:org.freedesktop.DBus.Error.UnknownProperty: Unknown property")
 
-        self.login_and_go("/system")
-
-        # Make sure the date loads
+        self.login_and_go("/system", superuser=False)
         b.wait_text_not("#system_information_systime_button", "")
+        b.wait_present('#system_information_systime_button[disabled]')
+
+        # Gain admin access
+        b.click(".pf-c-alert:contains('Web console is running in limited access mode.') button:contains('Turn on')")
+        b.wait_in_text(".modal-dialog:contains('Administrative access')", "Please authenticate")
+        b.set_input_text(".modal-dialog:contains('Administrative access') input", "foobar")
+        b.click(".modal-dialog button:contains('Authenticate')")
+        b.wait_not_present(".modal-dialog:contains('Administrative access')")
+        b.wait_not_visible(".pf-c-alert:contains('Web console is running in limited access mode.')")
 
         # Change the date
         b.click("#system_information_systime_button")
-        b.wait_popup("system_information_change_systime")
-        b.click("#change_systime button")
-        b.click("#change_systime li[value=manual_time] a")
-        b.wait_in_text("#change_systime button", "Manually")
-        b.set_val("#systime-date-input", "2020-01-24")
-        b.set_val("#systime-time-hours", "08")
-        b.set_val("#systime-time-minutes", "03")
-        b.click("#systime-apply-button")
-        b.wait_popdown("system_information_change_systime")
-
-        if m.image == "rhel-8-2-distropkg": # Changed in #13489
-            b.wait_text("#system_information_systime_button", "2020-01-24 08:03")
+        b.wait_visible("#system_information_change_systime")
+        self.set_change_time_dialog_mode("Manually")
+        b.set_input_text("#systime-date-input", "2020-01-24")
+        b.set_input_text("#systime-time-hours", "08")
+        b.set_input_text("#systime-time-minutes", "03")
+        if self.machine.image != "rhel-8-3-distropkg":
+            b.click("#system_information_change_systime .apply")
+            b.wait_not_present("#system_information_change_systime")
         else:
-            b.wait_text("#system_information_systime_button", "Jan 24, 2020 8:03 AM")
+            b.click("#systime-apply-button")
+            b.wait_popdown("system_information_change_systime")
+
+        b.wait_text("#system_information_systime_button", "Jan 24, 2020 8:03 AM")
 
         self.assertFalse(ntp_enabled())
         self.assertIn("Fri Jan 24 08:03:", m.execute("date"))
@@ -260,43 +276,36 @@ class TestSystemInfo(MachineCase):
 
         # Set to NTP
         b.click("#system_information_systime_button")
-        b.wait_popup("system_information_change_systime")
-        b.click("#change_systime button")
-        b.click("#change_systime li[value=ntp_time] a")
-        b.wait_in_text("#change_systime button", "Automatically using NTP")
-        b.click("#systime-apply-button")
-        b.wait_popdown("system_information_change_systime")
+        b.wait_visible("#system_information_change_systime")
+        self.set_change_time_dialog_mode("Automatically using NTP")
+        if self.machine.image != "rhel-8-3-distropkg":
+            b.click("#system_information_change_systime .apply")
+            b.wait_not_present("#system_information_change_systime")
+        else:
+            b.click("#systime-apply-button")
+            b.wait_popdown("system_information_change_systime")
 
         wait(ntp_enabled)
 
         # Change the date
         b.click("#system_information_systime_button")
-        b.wait_popup("system_information_change_systime")
-        b.click("#change_systime button")
-        b.click("#change_systime li[value=manual_time] a")
-        b.wait_in_text("#change_systime button", "Manually")
-        b.set_val("#systime-date-input", "2018-06-04")
-        b.set_val("#systime-time-hours", "06")
-        b.set_val("#systime-time-minutes", "34")
-        b.click("#systime-apply-button")
-        b.wait_popdown("system_information_change_systime")
+        b.wait_visible("#system_information_change_systime")
+        self.set_change_time_dialog_mode("Manually")
+        b.set_input_text("#systime-date-input", "2018-06-04")
+        b.set_input_text("#systime-time-hours", "06")
+        b.set_input_text("#systime-time-minutes", "34")
+        if self.machine.image != "rhel-8-3-distropkg":
+            b.click("#system_information_change_systime .apply")
+            b.wait_not_present("#system_information_change_systime")
+        else:
+            b.click("#systime-apply-button")
+            b.wait_popdown("system_information_change_systime")
 
         self.assertFalse(ntp_enabled())
         self.assertIn("Mon Jun  4 06:34:", m.execute("date"))
         self.assertIn("EEST 2018\n", m.execute("date"))
 
-        self.allow_authorize_journal_messages()
-        b.relogin('/system', authorized=False)
-        tooltip_sel = '.tooltip-inner'
-        b.wait_present('#system_information_systime_button[disabled]')
-        b.eval_js('window.cockpit_permission = cockpit.permission({ admin: true })')
-        b.wait_js_cond('window.cockpit_permission.allowed !== null')
-        b.mouse('#systime-tooltip', 'mouseover')
-        b.wait_text(tooltip_sel, 'The user admin is not permitted to change the system time')
-        b.mouse('#systime-tooltip', 'mouseout')
-        b.wait_not_present(tooltip_sel)
-
-    @skipImage("Uses timedatex, no NTP servers config", "rhel-8-2", "rhel-8-2-distropkg", "centos-8-stream")
+    @skipImage("Uses timedatex, no NTP servers config", "rhel-8-3", "rhel-8-3-distropkg", "centos-8-stream")
     def testTimeServers(self):
         m = self.machine
         b = self.browser
@@ -311,15 +320,13 @@ class TestSystemInfo(MachineCase):
         # Add two NTP servers.  We can't expect the servers to be used, so
         # we only test that they get added.
         b.click("#system_information_systime_button")
-        b.wait_popup("system_information_change_systime")
-        b.click("#change_systime button")
-        b.click("#change_systime li[value=ntp_time_custom] a")
-        b.wait_in_text("#change_systime button", "Automatically using specific NTP servers")
-        b.set_val("#systime-ntp-servers form:nth-child(1) input", "0.pool.ntp.org")
-        b.click('#systime-ntp-servers form:nth-child(1) button[data-action="add"]')
-        b.set_val("#systime-ntp-servers form:nth-child(2) input", "1.pool.ntp.org")
-        b.click("#systime-apply-button")
-        b.wait_popdown("system_information_change_systime")
+        b.wait_visible("#system_information_change_systime")
+        self.set_change_time_dialog_mode("Automatically using specific NTP servers")
+        b.set_input_text("#systime-ntp-servers tr:nth-child(1) input", "0.pool.ntp.org")
+        b.click('#systime-ntp-servers tr:nth-child(1) .fa-plus')
+        b.set_input_text("#systime-ntp-servers tr:nth-child(2) input", "1.pool.ntp.org")
+        b.click("#system_information_change_systime .apply")
+        b.wait_not_present("#system_information_change_systime")
 
         self.assertIn("0.pool.ntp.org", m.execute("grep '^NTP=' %s" % conf))
         self.assertIn("1.pool.ntp.org", m.execute("grep '^NTP=' %s" % conf))
@@ -328,14 +335,12 @@ class TestSystemInfo(MachineCase):
         # switch to default servers.
         m.write(conf, "[Time]\nNTP=2.pool.ntp.org\n")
         b.click("#system_information_systime_button")
-        b.wait_popup("system_information_change_systime")
-        b.wait_val("#systime-ntp-servers form:nth-child(1) input", "2.pool.ntp.org")
-        b.click("#change_systime button")
-        b.click("#change_systime li[value=ntp_time] a")
-        b.wait_in_text("#change_systime button", "Automatically using NTP")
-        b.wait_not_visible("#systime-ntp-servers")
-        b.click("#systime-apply-button")
-        b.wait_popdown("system_information_change_systime")
+        b.wait_visible("#system_information_change_systime")
+        b.wait_val("#systime-ntp-servers tr:nth-child(1) input", "2.pool.ntp.org")
+        self.set_change_time_dialog_mode("Automatically using NTP")
+        b.wait_not_present("#systime-ntp-servers")
+        b.click("#system_information_change_systime .apply")
+        b.wait_not_present("#system_information_change_systime")
 
         self.assertIn("2.pool.ntp.org", m.execute("grep '^#NTP=' %s" % conf))
 
@@ -348,8 +353,9 @@ class TestSystemInfo(MachineCase):
         self.login_and_go("/system")
         b.wait_not_present('#motd-box')
 
-        m.execute(r"printf '  Hello\n  World\n\n' >/etc/motd")
+        m.execute(r"printf '\n  \n  Hello\n  World\n\n' >/etc/motd")
         b.wait_visible('#motd-box')
+        # strips empty lines, but not leading spaces
         b.wait_text('#motd', "  Hello\n  World")
 
         b.click('#motd-box button')
@@ -367,6 +373,7 @@ class TestSystemInfo(MachineCase):
         # because of the reload
         self.allow_restart_journal_messages()
 
+    @nondestructive
     def testHardwareInfo(self):
         b = self.browser
         m = self.machine
@@ -390,7 +397,7 @@ class TestSystemInfo(MachineCase):
         b.wait_in_text('#hwinfo .info-table-ct tbody:nth-of-type(2) tr:nth-of-type(3) td', "/20")
 
         pci_selector = '#hwinfo #pci-listing'
-        heading_selector = ' .listing-ct-heading'
+        heading_selector = ' .ct-table-heading'
         # PCI
         b.wait_in_text(pci_selector + heading_selector, "PCI")
 
@@ -402,7 +409,7 @@ class TestSystemInfo(MachineCase):
 
         # sort by model
         b.click(pci_selector + ' thead th[data-label=Model] button')
-        b.wait_in_text(pci_selector + ' tbody tr:first-of-type td[data-label=Model]', "440FX")
+        b.wait_in_text(pci_selector + ' tbody tr:first-of-type td[data-label=Model]', "440")
         b.wait_in_text(pci_selector + ' tbody tr:last-of-type td[data-label=Model]', "Virtio SCSI")
         b.wait_not_in_text(pci_selector + ' tbody tr:last-of-type td[data-label=Model]', "Unclassified")
 
@@ -412,7 +419,8 @@ class TestSystemInfo(MachineCase):
 
         # now pretend this is a system without DMI
         b.logout()
-        self.machine.execute("mount -t tmpfs none /sys/class/dmi/id")
+        m.execute("mount -t tmpfs none /sys/class/dmi/id")
+        self.addCleanup(m.execute, "umount /sys/class/dmi/id")
         self.login_and_go("/system")
         # asset tag should be hidden
         b.wait_not_present('#system_information_asset_tag_text')
@@ -445,7 +453,6 @@ class TestSystemInfo(MachineCase):
         b.enter_page("/system/hwinfo")
         b.wait_in_text('#hwinfo .info-table-ct tbody:nth-of-type(1) tr:nth-of-type(2) td', "NAME")
         b.wait_in_text('#hwinfo .info-table-ct tbody:nth-of-type(1) tr:nth-of-type(3) td', "VENDOR")
-        self.machine.execute("umount /sys/class/dmi/id")
 
         # Memory details should be shown for generic QEMU memory
         # demidecode not available on certain images
@@ -457,6 +464,7 @@ class TestSystemInfo(MachineCase):
             # Test more specific memory data with a fake dmidecode
             m.write('/tmp/dmidecode', dmidecode)
             m.execute('chmod +x /tmp/dmidecode; mount -o bind /tmp/dmidecode $(which dmidecode)')
+            self.addCleanup(m.execute, 'umount $(which dmidecode)')
             b.reload()
             b.enter_page('/system/hwinfo')
             # first DIMM has unknown technology and rank
@@ -472,11 +480,12 @@ class TestSystemInfo(MachineCase):
             b.wait_text('#memory-listing tr:nth-of-type(2) td[data-label="Memory Technology"]', "Awesome")
             b.wait_text('#memory-listing tr:nth-of-type(2) td[data-label=Rank]', "Single Rank")
 
-            m.execute('umount $(which dmidecode)')
-
-    def testCPUSecurityMitigations(self):
+    @nondestructive
+    def testCPUSecurityMitigationsDetect(self):
         b = self.browser
         m = self.machine
+
+        self.restore_dir("/usr/local/bin")
 
         self.login_and_go('/system/hwinfo')
         b.wait_present('#hwinfo th:contains(CPU)')
@@ -486,7 +495,7 @@ class TestSystemInfo(MachineCase):
             m.execute('chmod +x /usr/local/bin/lscpu')
             if cmdline:
                 m.write('/run/cmdline', cmdline)
-                m.execute('mount --bind /run/cmdline /proc/cmdline')
+                m.execute('if selinuxenabled 2>/dev/null; then chcon --reference /proc/cmdline /run/cmdline; fi && mount --bind /run/cmdline /proc/cmdline')
 
             b.reload()
             b.enter_page('/system/hwinfo')
@@ -513,23 +522,26 @@ class TestSystemInfo(MachineCase):
         spoof_threads(2, True, True, 'param1 mitigations=nosmt,something param3=value3')
         spoof_threads(2, True, False, 'param1 mitigations=something param3=value3')
         spoof_threads(2, False, cmdline='param1 nosmt=someunknown param3=value3')
-        # Most OSes don't set nosmt by default, but there are some exceptions
-        expect_smt_default = m.image in ["fedora-coreos"]
-        spoof_threads(2, True, expect_smt_default, None)
+        spoof_threads(2, True, self.expect_smt_default, None)
+
+    def testCPUSecurityMitigationsEnable(self):
+        b = self.browser
+        m = self.machine
+
+        # spoof SMT
+        m.write('/usr/local/bin/lscpu', lscpu.format(2))
+        m.execute('chmod +x /usr/local/bin/lscpu')
 
         # Switch nosmt option
-        b.reload()
-        b.enter_page('/system/hwinfo')
+        self.login_and_go('/system/hwinfo')
         b.click('#hwinfo button:contains(Mitigations)')
-
-
         b.click('#cpu-mitigations-dialog #nosmt-switch input')
         b.wait_present('#cpu-mitigations-dialog #nosmt-switch input' +
-                       (expect_smt_default and ':not(:checked)' or ':checked'))
+                       (self.expect_smt_default and ':not(:checked)' or ':checked'))
         b.click('#cpu-mitigations-dialog Button:contains(Save and reboot)')
 
         m.wait_reboot()
-        if expect_smt_default:
+        if self.expect_smt_default:
             self.assertNotIn('nosmt', m.execute('cat /proc/cmdline'))
         else:
             self.assertIn('nosmt', m.execute('cat /proc/cmdline'))
@@ -578,13 +590,13 @@ fi
         b.click('#hwinfo button:contains(Mitigations)')
         b.wait_present('#cpu-mitigations-dialog span:contains(nosmt)')
         b.wait_present('#cpu-mitigations-dialog #nosmt-switch input' +
-                       (expect_smt_default and ':not(:checked)' or ':checked'))
+                       (self.expect_smt_default and ':not(:checked)' or ':checked'))
         b.click('#cpu-mitigations-dialog #nosmt-switch input')
         b.wait_present('#cpu-mitigations-dialog #nosmt-switch input' +
-                       (expect_smt_default and ':checked' or ':not(:checked)'))
+                       (self.expect_smt_default and ':checked' or ':not(:checked)'))
         b.click('#cpu-mitigations-dialog Button:contains(Save and reboot)')
         m.wait_reboot()
-        if expect_smt_default:
+        if self.expect_smt_default:
             self.assertIn('nosmt', m.execute('cat /proc/cmdline'))
         else:
             self.assertNotIn('nosmt', m.execute('cat /proc/cmdline'))
@@ -606,11 +618,13 @@ fi
         self.assertIn('mitigations=auto', m.execute('cat /proc/cmdline'))
 
         # Behaviour for non-admins
-        self.login_and_go('/system/hwinfo', authorized=False)
+        self.login_and_go('/system/hwinfo', superuser=False)
         b.wait_present('#hwinfo th:contains(CPU)')
         b.wait_present('#cpu_mitigations[disabled]')
-        b.mouse('#tip-cpu-security', 'mouseover')
-        b.wait_text('.tooltip-inner', 'The user admin is not permitted to change cpu security mitigations')
+        b.mouse('#tip-cpu-security', 'mouseenter')
+        b.wait_text('.pf-c-tooltip', 'The user admin is not permitted to change cpu security mitigations')
+        b.mouse('#tip-cpu-security', 'mouseleave')
+        b.wait_not_present("div.pf-c-tooltip")
 
         # Behaviour if grub update tools are missing
         b.logout()
@@ -634,21 +648,40 @@ fi
         self.allow_authorize_journal_messages()
         self.allow_restart_journal_messages()
 
-    @allowImage("insights-client only on RHEL", "rhel-7-8", "rhel-8-2")
-    def testInsightsWarning(self):
+    def testInsightsStatus(self):
         m = self.machine
         b = self.browser
+
+        if not m.image.startswith("rhel"):
+            self.skipTest("insights-client is only on RHEL")
 
         # Pretend that the Subscriptions page can do Insights stuff
         m.write("/usr/share/cockpit/subscription-manager/override.json", '{ "features": { "insights": true } }')
 
+        # Run a mock version of the Insights API locally and configure
+        # insights-client to access it.
+
+        m.upload(["verify/files/mock-insights"], "/var/tmp")
+        m.spawn("/var/tmp/mock-insights", "mock-insights")
+        m.write("/etc/insights-client/insights-client.conf",
+"""
+[insights-client]
+gpg=False
+auto_config=False
+base_url=127.0.0.1:8888/r/insights
+username=admin
+password=foobar
+insecure_connection=True
+""")
+
+        # Initially we are not registered
         self.login_and_go('/system')
+        b.wait_text(".system-health-insights a", "Not connected to Insights")
 
-        m.execute("systemctl disable insights-client.timer")
-        b.wait_text("#insights_text", "Not connected to Insights")
-
-        m.execute("systemctl enable insights-client.timer")
-        b.wait_not_present("#insights_text")
+        # Enable insights, results should appear automatically
+        m.execute("insights-client --register")
+        b.wait_in_text(".system-health-insights a", "3 hits, including important")
+        self.assertIn("123-nice-id", b.attr(".system-health-insights a", "href"))
 
 class TestPcp(packagelib.PackageCase):
 
@@ -681,7 +714,7 @@ class TestPcp(packagelib.PackageCase):
         b.wait_not_present("#server-pmlogger-switch")
         b.wait_in_text("#system-configuration-enable-pcp-link", "Enable stored metrics")
         b.click("#system-configuration-enable-pcp-link")
-        b.click(".modal-footer button:nth-of-type(2):contains('Install')")
+        b.click(".modal-footer button:contains('Install')")
         b.wait_not_present(".modal-dialog:contains('Install Software')")
 
 

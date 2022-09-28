@@ -103,20 +103,6 @@ on_closed_set_flag (CockpitTransport *transport,
   *flag = TRUE;
 }
 
-static gboolean
-on_logout_set_flag (CockpitTransport *transport,
-                    const gchar *command,
-                    const gchar *channel,
-                    JsonObject *options,
-                    GBytes *payload,
-                    gpointer user_data)
-{
-  gboolean *flag = user_data;
-  if (g_str_equal (command, "logout"))
-    *flag = TRUE;
-  return FALSE;
-}
-
 static void
 send_init_command (CockpitTransport *transport,
                    gboolean interactive)
@@ -169,6 +155,10 @@ send_init_command (CockpitTransport *transport,
       session_id = secure_getenv ("XDG_SESSION_ID");
       if (session_id)
         json_object_set_string_member (object, "session-id", session_id);
+
+      block = json_object_new ();
+      json_object_set_boolean_member (block, "explicit-superuser", TRUE);
+      json_object_set_object_member (object, "capabilities", block);
     }
 
   bytes = cockpit_json_write_bytes (object);
@@ -472,7 +462,6 @@ run_bridge (const gchar *interactive,
   gboolean terminated = FALSE;
   gboolean interupted = FALSE;
   gboolean closed = FALSE;
-  gpointer polkit_agent = NULL;
   const gchar *directory;
   struct passwd *pwd;
   GPid daemon_pid = 0;
@@ -557,25 +546,19 @@ run_bridge (const gchar *interactive,
       transport = cockpit_pipe_transport_new_fds ("stdio", 0, outfd);
     }
 
+  router = setup_router (transport, privileged_slave);
+
+#ifdef WITH_POLKIT
+  gpointer polkit_agent = NULL;
   if (uid != 0)
     {
       if (!interactive)
-        polkit_agent = cockpit_polkit_agent_register (transport, NULL);
+        polkit_agent = cockpit_polkit_agent_register (transport, router, NULL);
     }
+#endif
 
   g_resources_register (cockpitassets_get_resource ());
   cockpit_web_failure_resource = "/org/cockpit-project/Cockpit/fail.html";
-
-  if (privileged_slave)
-    {
-      /*
-       * When in privileged mode, exit right away when we get any sort of logout
-       * This enforces the fact that the user no longer has privileges.
-       */
-      g_signal_connect (transport, "control", G_CALLBACK (on_logout_set_flag), &closed);
-    }
-
-  router = setup_router (transport, privileged_slave);
 
   cockpit_dbus_user_startup (pwd);
   cockpit_dbus_setup_startup ();
@@ -583,6 +566,8 @@ run_bridge (const gchar *interactive,
   cockpit_dbus_machines_startup ();
   cockpit_dbus_config_startup ();
   cockpit_packages_dbus_startup (packages);
+  cockpit_dbus_login_messages_startup ();
+  cockpit_router_dbus_startup (router);
 
   call_update_router_data.router = router;
   call_update_router_data.privileged_slave = privileged_slave;
@@ -597,8 +582,10 @@ run_bridge (const gchar *interactive,
   while (!terminated && !closed && !interupted)
     g_main_context_iteration (NULL, TRUE);
 
+#ifdef WITH_POLKIT
   if (polkit_agent)
     cockpit_polkit_agent_unregister (polkit_agent);
+#endif
 
   g_object_unref (router);
   g_object_unref (transport);

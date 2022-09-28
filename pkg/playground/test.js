@@ -1,5 +1,7 @@
 import $ from "jquery";
 import cockpit from "cockpit";
+
+import '../../src/base1/patternfly-cockpit.scss';
 import "../../node_modules/@patternfly/patternfly/components/Button/button.scss";
 
 $(function() {
@@ -8,7 +10,7 @@ $(function() {
     $(".cockpit-internal-reauthorize .pf-c-button").on("click", function() {
         $(".cockpit-internal-reauthorize span").text("checking...");
         var cmd = "pkcheck --action-id org.freedesktop.policykit.exec --process $$ -u 2>&1";
-        cockpit.spawn(["sh", "-c", cmd])
+        cockpit.spawn(["sh", "-c", cmd], { superuser: "try" })
                 .stream(function(data) {
                     console.debug(data);
                 })
@@ -36,7 +38,7 @@ $(function() {
     $(".lock-channel .pf-c-button").on("click", function() {
         $(".lock-channel span").text("locking...");
         cockpit.spawn(["flock", "-o", "/tmp/playground-test-lock", "-c", "echo locked; sleep infinity"],
-                      { err: "message" })
+                      { superuser: "try", err: "message" })
                 .stream(function(data) {
                     $(".lock-channel span").text(data);
                 })

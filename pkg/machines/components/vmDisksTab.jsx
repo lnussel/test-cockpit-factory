@@ -28,7 +28,7 @@ import { getAllStoragePools, getVm, detachDisk } from '../actions/provider-actio
 import { EditDiskAction } from './diskEdit.jsx';
 import WarningInactive from './warningInactive.jsx';
 import { ListingTable } from "cockpit-components-table.jsx";
-import { DeleteResource } from './deleteResource.jsx';
+import { DeleteResourceButton, DeleteResourceModal } from './deleteResource.jsx';
 
 const _ = cockpit.gettext;
 
@@ -65,14 +65,14 @@ class VmDisksTab extends React.Component {
         super(props);
 
         this.state = {
-            showModal: false,
+            showAddDiskModal: false,
         };
         this.open = this.open.bind(this);
         this.close = this.close.bind(this);
     }
 
     close() {
-        this.setState({ showModal: false });
+        this.setState({ showAddDiskModal: false });
     }
 
     open() {
@@ -81,7 +81,7 @@ class VmDisksTab extends React.Component {
         // https://bugzilla.redhat.com/show_bug.cgi?id=1578836
         this.props.dispatch(getAllStoragePools(this.props.vm.connectionName))
                 .then(() => {
-                    this.setState({ showModal: true });
+                    this.setState({ showAddDiskModal: true });
                 });
     }
 
@@ -92,7 +92,7 @@ class VmDisksTab extends React.Component {
                 <Button id={`${idPrefix}-adddisk`} variant='primary' onClick={this.open} className='pull-right'>
                     {_("Add Disk")}
                 </Button>
-                {this.state.showModal && <AddDiskModalBody close={this.close} dispatch={dispatch} idPrefix={idPrefix} vm={vm} vms={vms} storagePools={storagePools.filter(pool => pool && pool.active)} />}
+                {this.state.showAddDiskModal && <AddDiskModalBody close={this.close} dispatch={dispatch} idPrefix={idPrefix} vm={vm} vms={vms} storagePools={storagePools.filter(pool => pool && pool.active)} />}
             </>
         );
         let renderCapacityUsed, renderAccess, renderAdditional;
@@ -161,19 +161,24 @@ class VmDisksTab extends React.Component {
                                 detail: ex.message, resourceId: vm.id,
                             });
                         })
-                        .then(() => dispatch(getVm({ connectionName: vm.connectionName, id:vm.id })));
+                        .then(() => {
+                            dispatch(getVm({ connectionName: vm.connectionName, id:vm.id }));
+                        });
             };
-
+            const deleteDialogProps = {
+                objectType: "Disk",
+                objectName: disk.target,
+                actionName: _("Remove"),
+                onClose: () => this.setState({ deleteDialogProps: undefined }),
+                deleteHandler: () => onRemoveDisk(),
+            };
             const diskActions = (
                 <div className='machines-listing-actions'>
-                    <DeleteResource objectType="Disk"
-                       className='machines-listing-actions'
-                       objectName={disk.target}
-                       objectId={vm.name + "-disk-" + disk.target}
+                    <DeleteResourceButton objectId={vm.name + "-disk-" + disk.target}
                        disabled={vm.state != 'shut off' && vm.state != 'running'}
+                       showDialog={() => this.setState({ deleteDialogProps })}
                        overlayText={_("The VM needs to be running or shut off to detach this device")}
-                       actionName={_("Remove")}
-                       deleteHandler={() => onRemoveDisk()} />
+                       actionName={_("Remove")} />
                     { vm.persistent && vm.inactiveXML.disks[disk.target] && // supported only  for persistent disks
                     <EditDiskAction disk={disk}
                         vm={vm}
@@ -186,12 +191,17 @@ class VmDisksTab extends React.Component {
         });
 
         return (
-            <ListingTable variant='compact'
-                actions={actions}
-                emptyCaption={_("No disks defined for this VM")}
-                aria-label={`VM ${vm.name} Disks`}
-                columns={columnTitles}
-                rows={rows} />
+            <>
+                {this.state.deleteDialogProps && <DeleteResourceModal {...this.state.deleteDialogProps} />}
+                <div className="ct-table-wrapper">
+                    <ListingTable variant='compact'
+                        actions={actions}
+                        emptyCaption={_("No disks defined for this VM")}
+                        aria-label={`VM ${vm.name} Disks`}
+                        columns={columnTitles}
+                        rows={rows} />
+                </div>
+            </>
         );
     }
 }

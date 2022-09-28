@@ -23,7 +23,7 @@ import time
 
 import parent
 from testlib import *
-from hacklib import *
+from machine_core.constants import TEST_OS_DEFAULT
 
 
 def break_hostkey(m, address, filename=None):
@@ -56,9 +56,8 @@ def fix_bridge(m):
 
 
 def check_failed_state(b, expected_title):
-    b.wait_in_text('#troubleshoot-dialog button:nth-of-type(1)', "Close")
     b.wait_in_text('#troubleshoot-dialog h4', expected_title)
-    b.click("#troubleshoot-dialog button:nth-of-type(1)")
+    b.click("#troubleshoot-dialog .modal-footer button:contains(Close)")
     b.wait_popdown('troubleshoot-dialog')
 
 
@@ -67,17 +66,16 @@ def start_machine_troubleshoot(b, new=False, known_host=False):
     b.click('#machine-troubleshoot')
     b.wait_popup('troubleshoot-dialog')
     if (new):
-        b.wait_text('#troubleshoot-dialog button:nth-of-type(2)', "Add")
-        b.click('#troubleshoot-dialog button:nth-of-type(2)')
+        b.click('#troubleshoot-dialog .modal-footer button:contains(Add)')
 
         if not known_host:
             b.wait_in_text('#troubleshoot-dialog', "Fingerprint")
-            b.click('#troubleshoot-dialog button:nth-of-type(2)')
+            b.click('#troubleshoot-dialog .modal-footer button:contains(Connect)')
 
 
 def fail_login(b):
-    b.click('#troubleshoot-dialog button:nth-of-type(2)')
-    b.wait_present('#troubleshoot-dialog button:nth-of-type(2):not([disabled])')
+    b.click('#troubleshoot-dialog .modal-footer button:contains(Log In)')
+    b.wait_present('#troubleshoot-dialog .modal-footer button:contains(Log In):not([disabled])')
     b.wait_in_text("#troubleshoot-dialog .dialog-error", "Login failed")
 
 
@@ -142,8 +140,15 @@ class TestMultiMachineAdd(MachineCase):
         self.machine2.execute("hostnamectl set-hostname machine2")
         self.machine3 = self.machines['machine3']
         self.machine3.execute("hostnamectl set-hostname machine3")
-        HACK_disable_problematic_preloads(self.machine2)
-        HACK_disable_problematic_preloads(self.machine3)
+
+        # Disable preloading on all machines ("machine1" is done in testlib.py)
+        # Preloading on machines with debug build can overload the browser and cause slowness and browser crashes
+        # In these tests we actually switch between machines in quick succession which can make things even worse
+        if self.machine.image == TEST_OS_DEFAULT:
+            self.machines["machine2"].write("/usr/share/cockpit/packagekit/override.json", '{ "preload": [ ] }')
+            self.machines["machine2"].write("/usr/share/cockpit/systemd/override.json", '{ "preload": [ ] }')
+            self.machines["machine3"].write("/usr/share/cockpit/packagekit/override.json", '{ "preload": [ ] }')
+            self.machines["machine3"].write("/usr/share/cockpit/systemd/override.json", '{ "preload": [ ] }')
 
     def testBasic(self):
         b = self.browser
@@ -204,7 +209,6 @@ class TestMultiMachineAdd(MachineCase):
                                     ".*: bridge failed: .*",
                                     ".*: bridge program failed: Child process exited with code .*")
 
-    @skipImage("Newer version (>= 0.8.5) of libssh required", "ubuntu-1804")
     def testGlobalSSHConfig(self):
         b = self.browser
         m = self.machine
@@ -237,8 +241,16 @@ class TestMultiMachine(MachineCase):
         self.machine2 = self.machines['machine2']
         self.machine2.execute("hostnamectl set-hostname machine2")
         self.machines['machine3'].execute("hostnamectl set-hostname machine3")
-        HACK_disable_problematic_preloads(self.machine2)
-        HACK_disable_problematic_preloads(self.machines["machine3"])
+        self.allow_journal_messages("sudo: unable to resolve host machine1: .*")
+
+        # Disable preloading on all machines ("machine1" is done in testlib.py)
+        # Preloading on machines with debug build can overload the browser and cause slowness and browser crashes
+        # In these tests we actually switch between machines in quick succession which can make things even worse
+        if self.machine.image == TEST_OS_DEFAULT:
+            self.machines["machine2"].write("/usr/share/cockpit/packagekit/override.json", '{ "preload": [ ] }')
+            self.machines["machine2"].write("/usr/share/cockpit/systemd/override.json", '{ "preload": [ ] }')
+            self.machines["machine3"].write("/usr/share/cockpit/packagekit/override.json", '{ "preload": [ ] }')
+            self.machines["machine3"].write("/usr/share/cockpit/systemd/override.json", '{ "preload": [ ] }')
 
     def checkDirectLogin(self, root='/'):
         b = self.browser
@@ -246,10 +258,6 @@ class TestMultiMachine(MachineCase):
         m = self.machine
 
         hostname_selector = "#system_information_hostname_text"
-
-        # Change os-release pretty name on m2
-        m2.execute("sed -i '/NAME=.*/d' /etc/os-release")
-        m2.execute("echo 'NAME=\"A Pretty Name\"' >> /etc/os-release")
 
         b.switch_to_top()
         b.go("{}/system".format(root))
@@ -278,8 +286,6 @@ class TestMultiMachine(MachineCase):
         b.wait_in_text(hostname_selector, "machine2")
         b.switch_to_top()
 
-        # Branding uses m2 pretty name
-        b.wait_in_text("#index-brand", "A Pretty Name")
         b.wait_js_cond('window.location.pathname == "{0}=10.111.113.2/system"'.format(root))
         m2_dashboard_name = "machine2"
 
@@ -355,7 +361,7 @@ class TestMultiMachine(MachineCase):
         b.wait_in_text("#conversation-prompt", "Fingerprint")
         b.wait_in_text("#conversation-message", "Do you want to proceed this time?")
 
-        match = re.match(r'(MD5|SHA256) Fingerprint \(ssh-(.*)\):', b.text("#conversation-prompt"))
+        match = re.match(r'(MD5|SHA256) Fingerprint \((?:ssh-)?([^-]*).*\):', b.text("#conversation-prompt"))
         assert match
         (hash_fn, algo) = match.groups()
         try:
@@ -447,14 +453,20 @@ class TestMultiMachine(MachineCase):
         self.checkDirectLogin('/')
 
     @skipImage("test VM image does not have FIPS support", "debian-stable",
-               "debian-testing", "ubuntu-1804", "ubuntu-2004", "ubuntu-stable", "fedora-coreos")
+               "debian-testing", "ubuntu-2004", "ubuntu-stable", "fedora-coreos")
     def testFIPS(self):
         b = self.browser
 
-        # enable FIPS
-        self.machine.execute(r'grubby --update-kernel=$(grubby --default-kernel) --args=fips=1')
-        self.machine.execute(
-            r'uuid=$(findmnt -no uuid /boot); [ -n "$uuid" ] && grubby --update-kernel=$(grubby --default-kernel) --args=boot=UUID=${uuid}')
+        # enable FIPS: RHEL has and needs a convenience script for that
+        # https://access.redhat.com/documentation/en-us/red_hat_enterprise_linux/8/html/security_hardening/using-the-system-wide-cryptographic-policies_security-hardening#switching-the-system-to-fips-mode_using-the-system-wide-cryptographic-policies
+        self.machine.execute(r'''set -e;
+            if type fips-mode-setup >/dev/null 2>&1; then
+                fips-mode-setup --enable
+            else
+                grubby --update-kernel=$(grubby --default-kernel) --args=fips=1
+                uuid=$(findmnt -no uuid /boot)
+                [ -n "$uuid" ] && grubby --update-kernel=$(grubby --default-kernel) --args=boot=UUID=${uuid}
+            fi''')
         self.machine.spawn('sync && sync && sync && sleep 0.1 && reboot', 'reboot')
         self.machine.wait_reboot()
         # ensure it's really enabled
@@ -513,7 +525,7 @@ class TestMultiMachine(MachineCase):
         b.click('a[href="/@10.111.113.2/users"]')
         b.enter_page("/users", host="10.111.113.2")
         b.wait_present("#accounts-list")
-        b.click("#accounts-list div.cockpit-account:first-child")
+        b.click("#accounts-list .cockpit-account:first-child")
         b.wait_text("#account-user-name", "admin")
         b.switch_to_top()
         b.wait_js_cond('window.location.pathname == "/cockpit-new/@10.111.113.2/users"')
@@ -546,10 +558,10 @@ class TestMultiMachine(MachineCase):
         m2 = self.machine2
 
         # Modify the terminals to be different on the two machines.
-        m1.needs_writable_usr()
-        m1.execute("gunzip -c /usr/share/cockpit/systemd/terminal.html.gz | sed -e 's|</body>|magic-m1-token</body>|' > /usr/share/cockpit/systemd/terminal.html")
-        m2.needs_writable_usr()
-        m2.execute("gunzip -c /usr/share/cockpit/systemd/terminal.html.gz | sed -e 's|</body>|magic-m2-token</body>|' > /usr/share/cockpit/systemd/terminal.html")
+        m1.execute("zcat /usr/share/cockpit/systemd/terminal.html.gz | sed -e 's|</body>|magic-m1-token</body>|' | gzip"
+                   " > /tmp/terminal.html.gz && mount -o bind /tmp/terminal.html.gz /usr/share/cockpit/systemd/terminal.html.gz")
+        m2.execute("zcat /usr/share/cockpit/systemd/terminal.html.gz | sed -e 's|</body>|magic-m2-token</body>|' | gzip"
+                   " > /tmp/terminal.html.gz && mount -o bind /tmp/terminal.html.gz /usr/share/cockpit/systemd/terminal.html.gz")
 
         self.login_and_go("/dashboard")
         add_machine(b, "10.111.113.2")
@@ -843,10 +855,9 @@ class TestMultiMachine(MachineCase):
         b.set_val("#edit-machine-port", "2222")
         b.click('#troubleshoot-dialog {}'.format(self.primary_btn_class))
         # Using libssh's knownhosts api port is taken into account when verifying a host
-        if m1.image not in [ 'ubuntu-1804']:
-            b.wait_in_text('#troubleshoot-dialog h4', "Unknown Host Key")
-            b.wait_in_text('#troubleshoot-dialog {}'.format(self.primary_btn_class), "Connect")
-            b.click('#troubleshoot-dialog {}'.format(self.primary_btn_class))
+        b.wait_in_text('#troubleshoot-dialog h4', "Unknown Host Key")
+        b.wait_in_text('#troubleshoot-dialog {}'.format(self.primary_btn_class), "Connect")
+        b.click('#troubleshoot-dialog {}'.format(self.primary_btn_class))
         b.wait_in_text('#troubleshoot-dialog h4', "Log in to")
         b.wait_visible("#login-diff-password")
         b.click("#login-type button")
@@ -866,6 +877,9 @@ class TestMultiMachine(MachineCase):
         b.set_val("#login-user-input", "admin")
         b.set_val("#login-password-input", "foobar")
         b.set_checked("#authorized-input", False)
+        # We also need to switch off superuser since SSH connections
+        # might use the password saved for the superuser startup.
+        b.eval_js('window.localStorage.setItem("superuser:admin", "none");')
         b.click('#login-button')
         b.expect_load()
 

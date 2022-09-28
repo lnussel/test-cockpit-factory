@@ -17,11 +17,13 @@
  * along with Cockpit; If not, see <http://www.gnu.org/licenses/>.
  */
 
+import '../../src/base1/patternfly-cockpit.scss';
 import $ from 'jquery';
 import React from "react";
 import ReactDOM from "react-dom";
 import { OnOffSwitch } from "cockpit-components-onoff.jsx";
 import cockpit from 'cockpit';
+import { superuser } from 'superuser';
 
 import firewall from './firewall-client.js';
 import * as utils from './utils';
@@ -80,6 +82,7 @@ function select_btn(func, spec, klass) {
     });
 
     function select(a) {
+        choice = a;
         $(btn).val(a);
     }
 
@@ -1479,16 +1482,13 @@ function make_network_plot_post_hook(unit) {
     };
 }
 
-var permission = cockpit.permission({ admin: true });
-$(permission).on("changed", update_network_privileged);
-
 function update_network_privileged() {
-    $(".network-privileged").update_privileged(
-        permission, cockpit.format(
-            _("The user <b>$0</b> is not permitted to modify network settings"),
-            permission.user ? permission.user.name : '')
-    );
+    $(".network-privileged").toggle(!!superuser.allowed);
+    $(".network-privileged-disabled").toggleClass("disabled", !superuser.allowed);
 }
+
+superuser.reload_page_on_change();
+superuser.addEventListener("changed", update_network_privileged);
 
 /* Resource usage monitoring
 */
@@ -1730,11 +1730,15 @@ PageNetworking.prototype = {
 
     enter: function () {
         this.log_box = journal.logbox(["_SYSTEMD_UNIT=NetworkManager.service",
-            "_SYSTEMD_UNIT=firewalld.service"], 10);
+            "_SYSTEMD_UNIT=firewalld.service"], 10,
+                                      { prio: "debug", _SYSTEMD_UNIT: "NetworkManager.service,firewalld.service" });
         $('#networking-log').empty()
                 .append(this.log_box);
 
         $(this.model).on('changed.networking', $.proxy(this, "update_devices"));
+        $("#goto-networking-logs").on("click", function() {
+            cockpit.jump("/system/logs/#/?prio=debug&_SYSTEMD_UNIT=NetworkManager.service,firewalld.service");
+        });
         this.update_devices();
     },
 
@@ -2074,10 +2078,14 @@ function choice_title(choices, choice, def) {
  * settle_time too short:   Some bad changes that take time to have any
  *                          effect will be let through.
  *
- * settle_time too high:    All operations take a long time, and the
- *                          curtain needs to come up to prevent the
- *                          user from interacting with the page.  Thus settle_time
- *                          should be shorter than curtain_time.
+ * settle_time too high:    All operations take a long time and the race
+ *                          between Cockpit destroying the checkpoint
+ *                          and NetworkManager rolling it back (see
+ *                          above) gets tighter.  The curtain
+ *                          needs to come up to prevent the user from
+ *                          interacting with the page.  Thus
+ *                          settle_time should be shorter than
+ *                          curtain_time.
  *
  * rollback_time too short: Good changes that take a long time to complete
  *                          (on a loaded machine, say) are cancelled spuriously.
@@ -2092,8 +2100,8 @@ function choice_title(choices, choice, def) {
  *                          less patience than Linux in this regard.
  */
 
-var curtain_time = 4.0;
-var settle_time = 3.0;
+var curtain_time = 1.5;
+var settle_time = 1.0;
 var rollback_time = 7.0;
 
 function with_checkpoint(model, modify, options) {
@@ -2136,11 +2144,17 @@ function with_checkpoint(model, modify, options) {
     //
     // https://bugzilla.redhat.com/show_bug.cgi?id=1378393
     // https://bugzilla.redhat.com/show_bug.cgi?id=1398316
+    //
+    // We also switch off checkpoints for most of the integration
+    // tests.
 
-    if (options.hack_does_add_or_remove) {
+    if (options.hack_does_add_or_remove || window.cockpit_tests_disable_checkpoints) {
         modify();
         return;
     }
+
+    if (window.cockpit_tests_checkpoints_settle_time)
+        settle_time = window.cockpit_tests_checkpoints_settle_time;
 
     manager.checkpoint_create(options.devices || [], rollback_time)
             .done(function (cp) {
@@ -2542,7 +2556,7 @@ PageNetworkInterface.prototype = {
         $('#network-interface-mac').empty();
         if (can_edit_mac) {
             $('#network-interface-mac').append(
-                $('<a tabindex="0">')
+                $('<a tabindex="0" class="network-privileged-disabled">')
                         .text(mac)
                         .syn_click(self.model, function () {
                             self.set_mac();
@@ -2689,7 +2703,7 @@ PageNetworkInterface.prototype = {
                             $('<td>').text(_("General")),
                             $('<td class="networking-controls">').append(
                                 $('<label for="autoreconnect">').append(
-                                    $('<input type="checkbox" id="autoreconnect">')
+                                    $('<input type="checkbox" id="autoreconnect" class="network-privileged">')
                                             .prop('checked', settings.connection.autoconnect)
                                             .change(function () {
                                                 settings.connection.autoconnect = $(this).prop('checked');
@@ -2715,7 +2729,7 @@ PageNetworkInterface.prototype = {
                             .text(title)
                             .css('vertical-align', rows.length > 1 ? "top" : "center"),
                     $('<td>').append(
-                        $('<a tabindex="0" class="network-privileged">')
+                        $('<a tabindex="0" class="network-privileged-disabled">')
                                 .append(link_text)
                                 .syn_click(self.model, function () { configure() })));
             }

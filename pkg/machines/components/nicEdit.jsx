@@ -20,7 +20,7 @@ import React from 'react';
 import cockpit from 'cockpit';
 import PropTypes from 'prop-types';
 import { Modal } from 'patternfly-react';
-import { Button } from '@patternfly/react-core';
+import { Button, Alert } from '@patternfly/react-core';
 
 import { ModalError } from 'cockpit-components-inline-notification.jsx';
 import { NetworkTypeAndSourceRow, NetworkModelRow } from './nicBody.jsx';
@@ -47,7 +47,7 @@ const NetworkMacRow = ({ network }) => {
     );
 };
 
-class EditNICModal extends React.Component {
+export class EditNICModal extends React.Component {
     constructor(props) {
         super(props);
 
@@ -120,7 +120,7 @@ class EditNICModal extends React.Component {
                 })
                 .then(() => {
                     dispatch(getVm({ connectionName: vm.connectionName, id: vm.id }));
-                    this.props.close();
+                    this.props.onClose();
                 });
     }
 
@@ -145,87 +145,40 @@ class EditNICModal extends React.Component {
                 <NetworkMacRow network={network} />
             </form>
         );
-        const showFooterWarning = () => {
+        const showWarning = () => {
             if (vm.state === 'running' && (
                 this.state.networkType !== network.type ||
                 this.state.networkSource !== network.source[network.type] ||
                 this.state.networkModel !== network.model)
             ) {
-                return (
-                    <span id={`${idPrefix}-edit-dialog-idle-message`} className='idle-message'>
-                        <i className='pficon pficon-pending' />
-                        <span>{_("Changes will take effect after shutting down the VM")}</span>
-                    </span>
-                );
+                return <Alert isInline variant='warning' id={`${idPrefix}-edit-dialog-idle-message`} title={_("Changes will take effect after shutting down the VM")} />;
             }
         };
 
         return (
-            <Modal id={`${idPrefix}-edit-dialog-modal-window`} onHide={this.props.close} className='nic-edit' show>
+            <Modal id={`${idPrefix}-edit-dialog-modal-window`} onHide={this.props.onClose} className='nic-edit' show>
                 <Modal.Header>
                     <Modal.CloseButton onClick={this.props.close} />
                     <Modal.Title> {`${network.mac} Virtual Network Interface Settings`} </Modal.Title>
                 </Modal.Header>
                 <Modal.Body>
+                    { showWarning() }
                     {defaultBody}
                 </Modal.Body>
                 <Modal.Footer>
                     {this.state.dialogError && <ModalError dialogError={this.state.dialogError} dialogErrorDetail={this.state.dialogErrorDetail} />}
-                    { showFooterWarning() }
-                    <Button id={`${idPrefix}-edit-dialog-cancel`} variant='secondary' className='btn-cancel' onClick={this.props.close}>
-                        {_("Cancel")}
-                    </Button>
                     <Button isDisabled={this.state.saveDisabled} id={`${idPrefix}-edit-dialog-save`} variant='primary' onClick={this.save}>
                         {_("Save")}
+                    </Button>
+                    <Button id={`${idPrefix}-edit-dialog-cancel`} variant='link' className='btn-cancel' onClick={this.props.onClose}>
+                        {_("Cancel")}
                     </Button>
                 </Modal.Footer>
             </Modal>
         );
     }
 }
-
-export class EditNICAction extends React.Component {
-    constructor(props) {
-        super(props);
-
-        this.state = {
-            showModal: false,
-        };
-        this.open = this.open.bind(this);
-        this.close = this.close.bind(this);
-    }
-
-    close() {
-        this.setState({ showModal: false });
-    }
-
-    open() {
-        this.setState({ showModal: true });
-    }
-
-    render() {
-        const { idPrefix, dispatch, vm, network, nodeDevices, interfaces, availableSources } = this.props;
-
-        return (
-            <div id={`${idPrefix}-edit-dialog-full`}>
-                <Button id={`${idPrefix}-edit-dialog`} variant='secondary' onClick={this.open}>
-                    {_("Edit")}
-                </Button>
-
-                {this.state.showModal && <EditNICModal idPrefix={idPrefix}
-                                             dispatch={dispatch}
-                                             vm={vm}
-                                             network={network}
-                                             nodeDevices={nodeDevices}
-                                             interfaces={interfaces}
-                                             availableSources={availableSources}
-                                             close={this.close} />}
-            </div>
-        );
-    }
-}
-
-EditNICAction.propTypes = {
+EditNICModal.propTypes = {
     availableSources: PropTypes.object.isRequired,
     dispatch: PropTypes.func.isRequired,
     idPrefix: PropTypes.string.isRequired,
@@ -233,6 +186,5 @@ EditNICAction.propTypes = {
     network: PropTypes.object.isRequired,
     interfaces: PropTypes.array.isRequired,
     nodeDevices: PropTypes.array.isRequired,
+    onClose: PropTypes.func.isRequired,
 };
-
-export default EditNICAction;

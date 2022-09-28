@@ -22,11 +22,16 @@ import cockpit from "cockpit";
 import React from "react";
 import ReactDOM from "react-dom";
 
+import '../../src/base1/patternfly-cockpit.scss';
+
 import * as troubleshootClient from "./setroubleshoot-client";
 import * as selinuxClient from "./selinux-client.js";
 import { SETroubleshootPage } from "./setroubleshoot-view.jsx";
+import { superuser } from 'superuser';
 
 const _ = cockpit.gettext;
+
+superuser.reload_page_on_change();
 
 var initStore = function(rootElement) {
     var dataStore = { };
@@ -72,7 +77,7 @@ var initStore = function(rootElement) {
     dataStore.selinuxStatus = selinuxClient.init(selinuxStatusChanged);
 
     // run a fix and update the entries accordingly
-    var runFix = function(alertId, analysisId, runCommand) {
+    var runFix = function(alertId, analysisId, fixId, runCommand) {
         var idx;
         for (idx = dataStore.entries.length - 1; idx >= 0; --idx) {
             if (dataStore.entries[idx].key == alertId)
@@ -82,7 +87,7 @@ var initStore = function(rootElement) {
             console.log("Unable to find alert entry for element requesting fix: " + alertId + " (" + analysisId + ").");
             return;
         }
-        dataStore.entries[idx].fix = {
+        dataStore.entries[idx].details.pluginAnalysis[fixId].fix = {
             plugin: analysisId,
             running: true,
             result: null,
@@ -97,7 +102,7 @@ var initStore = function(rootElement) {
 
         promise
                 .done(function(output) {
-                    dataStore.entries[idx].fix = {
+                    dataStore.entries[idx].details.pluginAnalysis[fixId].fix = {
                         plugin: analysisId,
                         running: false,
                         result: output,
@@ -107,7 +112,7 @@ var initStore = function(rootElement) {
                     dataStore.render();
                 })
                 .fail(function(error) {
-                    dataStore.entries[idx].fix = {
+                    dataStore.entries[idx].details.pluginAnalysis[fixId].fix = {
                         plugin: analysisId,
                         running: false,
                         result: error,

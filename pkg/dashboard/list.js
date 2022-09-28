@@ -17,16 +17,17 @@
  * along with Cockpit; If not, see <http://www.gnu.org/licenses/>.
  */
 
+import '../../src/base1/patternfly-cockpit.scss';
 import $ from "jquery";
 import { mustache } from "mustache";
 
 import cockpit from "cockpit";
+import { superuser } from "superuser";
 import * as plot from "plot.js";
 import { machines } from "machines";
 import { new_machine_dialog_manager } from "machine-dialogs";
 import { cpu_ram_info } from "machine-info.js";
 import { image_editor } from "./image-editor.js";
-import "patterns";
 
 const _ = cockpit.gettext;
 
@@ -222,15 +223,10 @@ function host_edit_dialog(machine_manager, machine_dialogs, host) {
             });
 }
 
-var permission = cockpit.permission({ admin: true });
-$(permission).on("changed", update_servers_privileged);
+superuser.addEventListener("changed", update_servers_privileged);
 
 function update_servers_privileged() {
-    $(".servers-privileged").update_privileged(
-        permission, cockpit.format(
-            _("The user <b>$0</b> is not permitted to manage servers"),
-            permission.user ? permission.user.name : '')
-    );
+    $(".servers-privileged").prop("hidden", !superuser.allowed);
 }
 
 PageDashboard.prototype = {
@@ -264,6 +260,7 @@ PageDashboard.prototype = {
         $('#dashboard-add').click(function () {
             self.mdialogs.render_dialog("add-machine", "dashboard_setup_server_dialog");
         });
+        $('#dashboard-add').tooltip({ trigger : 'hover' });
         $('#dashboard-enable-edit').click(function () {
             self.toggle_edit(!self.edit_enabled);
         });
@@ -448,8 +445,6 @@ PageDashboard.prototype = {
                     title : _("You are currently connected directly to this server. You cannot delete it.")
                 });
                 $(".delete-localhost").prop('disabled', true);
-                $(".delete-localhost").toggleClass('servers-privileged', false);
-                update_servers_privileged();
                 update_series();
             }
 

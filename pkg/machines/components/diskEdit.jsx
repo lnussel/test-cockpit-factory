@@ -20,7 +20,7 @@
 import React from 'react';
 import { Modal } from 'patternfly-react';
 import cockpit from 'cockpit';
-import { Button, Tooltip } from '@patternfly/react-core';
+import { Button, Tooltip, Alert } from '@patternfly/react-core';
 import { InfoAltIcon } from '@patternfly/react-icons';
 
 import * as Select from 'cockpit-components-select.jsx';
@@ -93,7 +93,7 @@ const AccessRow = ({ onValueChanged, dialogValues, driverType, idPrefix }) => {
             <label className='control-label' htmlFor={`${idPrefix}-access`}>
                 {_("Access")}
             </label>
-            <label className="radio" onClick={e => e.stopPropagation()}>
+            <label className="radio">
                 <input id={`${idPrefix}-readonly`}
                        type="radio"
                        name="readonly"
@@ -105,7 +105,7 @@ const AccessRow = ({ onValueChanged, dialogValues, driverType, idPrefix }) => {
                        className={dialogValues.readonly ? "active" : ''} />
                 {_("Read-only")}
             </label>
-            <label className="radio" onClick={e => e.stopPropagation()}>
+            <label className="radio">
                 <input id={`${idPrefix}-writable`}
                        type="radio"
                        name="writable"
@@ -118,7 +118,7 @@ const AccessRow = ({ onValueChanged, dialogValues, driverType, idPrefix }) => {
                 {_("Writeable")}
             </label>
             {(driverType === "raw") &&
-            <label className="radio" onClick={e => e.stopPropagation()}>
+            <label className="radio">
                 <input id={`${idPrefix}-writable-shareable`}
                        type="radio"
                        name="writable-shareable"
@@ -188,16 +188,11 @@ class EditDiskModalBody extends React.Component {
             </div>
         );
 
-        const showFooterWarning = () => {
+        const showWarning = () => {
             if (vm.state === 'running' && (
                 this.state.readonly !== disk.readonly ||
                 this.state.shareable !== disk.shareable)) {
-                return (
-                    <span id={`${idPrefix}-idle-message`} className='idle-message'>
-                        <i className='pficon pficon-pending' />
-                        <span>{_("Changes will take effect after shutting down the VM")}</span>
-                    </span>
-                );
+                return <Alert isInline variant='warning' id={`${idPrefix}-idle-message`} title={_("Changes will take effect after shutting down the VM")} />;
             }
         };
 
@@ -208,16 +203,16 @@ class EditDiskModalBody extends React.Component {
                     <Modal.Title> {'Edit ' + getDiskPrettyName(vm.disks[disk.target]) + ' Attributes'} </Modal.Title>
                 </Modal.Header>
                 <Modal.Body>
+                    { showWarning() }
                     {defaultBody}
                 </Modal.Body>
                 <Modal.Footer>
                     {this.state.dialogError && <ModalError dialogError={this.state.dialogError} dialogErrorDetail={this.state.dialogErrorDetail} />}
-                    { showFooterWarning() }
-                    <Button id={`${idPrefix}-dialog-cancel`} variant='secondary' className='btn-cancel' onClick={this.props.close}>
-                        {_("Cancel")}
-                    </Button>
                     <Button id={`${idPrefix}-dialog-save`} variant='primary' onClick={this.onSaveClicked}>
                         {_("Save")}
+                    </Button>
+                    <Button id={`${idPrefix}-dialog-cancel`} variant='link' className='btn-cancel' onClick={this.props.close}>
+                        {_("Cancel")}
                     </Button>
                 </Modal.Footer>
             </Modal>

@@ -16,58 +16,64 @@
  * You should have received a copy of the GNU Lesser General Public License
  * along with Cockpit; If not, see <http://www.gnu.org/licenses/>.
  */
+import '../../src/base1/patternfly-cockpit.scss';
+import 'polyfills'; // once per application
 
 import cockpit from "cockpit";
-import '../lib/polyfills.js'; // once per application
 import React, { useState, useEffect } from "react";
 import ReactDOM from 'react-dom';
 
 import moment from "moment";
-import { OverlayTrigger, Tooltip } from "patternfly-react";
-import { Button } from '@patternfly/react-core';
+import { Button, Tooltip } from '@patternfly/react-core';
 import { RebootingIcon, CheckIcon, ExclamationCircleIcon } from "@patternfly/react-icons";
 import { Remarkable } from "remarkable";
+
 import AutoUpdates from "./autoupdates.jsx";
 import { History, PackageList } from "./history.jsx";
 import { page_status } from "notifications";
 import { EmptyStatePanel } from "cockpit-components-empty-state.jsx";
 
+import { superuser } from 'superuser';
 import * as PK from "packagekit.js";
 
 import "listing.scss";
 
 const _ = cockpit.gettext;
-moment.locale(cockpit.language);
 
 // "available" heading is built dynamically
-const STATE_HEADINGS = {
-    loading: _("Loading available updates, please wait..."),
-    locked: _("Some other program is currently using the package manager, please wait..."),
-    refreshing: _("Refreshing package information"),
-    uptodate: _("No updates pending"),
-    applying: _("Applying updates"),
-    updateSuccess: null,
-    updateError: _("Applying updates failed"),
-    loadError: _("Loading available updates failed"),
-};
+let STATE_HEADINGS = {};
+let PK_STATUS_STRINGS = {};
+let PK_STATUS_LOG_STRINGS = {};
+const packageSummaries = {};
 
-const PK_STATUS_STRINGS = {
-    [PK.Enum.STATUS_DOWNLOAD]: _("Downloading"),
-    [PK.Enum.STATUS_INSTALL]: _("Installing"),
-    [PK.Enum.STATUS_UPDATE]: _("Updating"),
-    [PK.Enum.STATUS_CLEANUP]: _("Setting up"),
-    [PK.Enum.STATUS_SIGCHECK]: _("Verifying"),
-};
+function init() {
+    STATE_HEADINGS = {
+        loading: _("Loading available updates, please wait..."),
+        locked: _("Some other program is currently using the package manager, please wait..."),
+        refreshing: _("Refreshing package information"),
+        uptodate: _("No updates pending"),
+        applying: _("Applying updates"),
+        updateSuccess: null,
+        updateError: _("Applying updates failed"),
+        loadError: _("Loading available updates failed"),
+    };
 
-const PK_STATUS_LOG_STRINGS = {
-    [PK.Enum.STATUS_DOWNLOAD]: _("Downloaded"),
-    [PK.Enum.STATUS_INSTALL]: _("Installed"),
-    [PK.Enum.STATUS_UPDATE]: _("Updated"),
-    [PK.Enum.STATUS_CLEANUP]: _("Set up"),
-    [PK.Enum.STATUS_SIGCHECK]: _("Verified"),
-};
+    PK_STATUS_STRINGS = {
+        [PK.Enum.STATUS_DOWNLOAD]: _("Downloading"),
+        [PK.Enum.STATUS_INSTALL]: _("Installing"),
+        [PK.Enum.STATUS_UPDATE]: _("Updating"),
+        [PK.Enum.STATUS_CLEANUP]: _("Setting up"),
+        [PK.Enum.STATUS_SIGCHECK]: _("Verifying"),
+    };
 
-var packageSummaries = {};
+    PK_STATUS_LOG_STRINGS = {
+        [PK.Enum.STATUS_DOWNLOAD]: _("Downloaded"),
+        [PK.Enum.STATUS_INSTALL]: _("Installed"),
+        [PK.Enum.STATUS_UPDATE]: _("Updated"),
+        [PK.Enum.STATUS_CLEANUP]: _("Set up"),
+        [PK.Enum.STATUS_SIGCHECK]: _("Verified"),
+    };
+}
 
 // parse CVEs from an arbitrary text (changelog) and return URL array
 function parseCVEs(text) {
@@ -111,7 +117,7 @@ function cleanupChangelogLine(text) {
     return text.trim();
 }
 
-function Expander({ title, onExpand, children }) {
+const Expander = ({ title, onExpand, children }) => {
     const [expanded, setExpanded] = useState(false);
 
     useEffect(() => {
@@ -131,7 +137,7 @@ function Expander({ title, onExpand, children }) {
             </div>
             {expanded ? children : null}
         </>);
-}
+};
 
 function count_security_updates(updates) {
     var num_security = 0;
@@ -149,51 +155,51 @@ function find_highest_severity(updates) {
     return max;
 }
 
-function HeaderBar(props) {
-    var num_updates = Object.keys(props.updates).length;
-    var num_security = 0;
-    var state;
+const HeaderBar = ({ state, updates, timeSinceRefresh, onRefresh, unregistered, allowCancel, onCancel }) => {
+    const num_updates = Object.keys(updates).length;
+    let num_security = 0;
+    let state_str;
 
     // unregistered & no available updates → blank slate, no header bar
-    if (props.unregistered && props.state == "uptodate")
+    if (unregistered && state == "uptodate")
         return null;
 
-    if (props.state == "available") {
-        num_security = count_security_updates(props.updates);
+    if (state == "available") {
+        num_security = count_security_updates(updates);
         if (num_updates == num_security)
-            state = cockpit.ngettext("$1 security fix", "$1 security fixes", num_security);
+            state_str = cockpit.ngettext("$1 security fix", "$1 security fixes", num_security);
         else {
-            state = cockpit.ngettext("$0 update", "$0 updates", num_updates);
+            state_str = cockpit.ngettext("$0 update", "$0 updates", num_updates);
             if (num_security > 0)
-                state += cockpit.ngettext(", including $1 security fix", ", including $1 security fixes", num_security);
+                state_str += cockpit.ngettext(", including $1 security fix", ", including $1 security fixes", num_security);
         }
-        state = cockpit.format(state, num_updates, num_security);
+        state_str = cockpit.format(state_str, num_updates, num_security);
     } else {
-        state = STATE_HEADINGS[props.state];
+        state_str = STATE_HEADINGS[state];
     }
 
-    if (!state)
+    if (!state_str)
         return null;
 
-    var lastChecked;
-    var actionButton;
-    if (props.state == "uptodate" || props.state == "available") {
-        if (!props.unregistered)
-            actionButton = <Button variant="secondary" onClick={props.onRefresh}>{_("Check for Updates")}</Button>;
-        if (props.timeSinceRefresh !== null)
-            lastChecked = cockpit.format(_("Last checked: $0"), moment(moment().valueOf() - props.timeSinceRefresh * 1000).fromNow());
-    } else if (props.state == "applying") {
-        actionButton = <Button variant="secondary" onClick={props.onCancel} isDisabled={!props.allowCancel}>{_("Cancel")}</Button>;
+    let lastChecked;
+    let actionButton;
+    if (state == "uptodate" || state == "available") {
+        if (!unregistered)
+            actionButton = <Button variant="secondary" onClick={onRefresh}>{_("Check for Updates")}</Button>;
+        if (timeSinceRefresh !== null)
+            lastChecked = cockpit.format(_("Last checked: $0"), moment(moment().valueOf() - timeSinceRefresh * 1000).fromNow());
+    } else if (state == "applying") {
+        actionButton = <Button variant="link" onClick={onCancel} isDisabled={!allowCancel}>{_("Cancel")}</Button>;
     }
 
     return (
         <div className="content-header-extra">
-            <div id="state" className="content-header-extra--state">{state}</div>
+            <div id="state" className="content-header-extra--state">{state_str}</div>
             <div className="content-header-extra--updated">{lastChecked}</div>
             <div className="content-header-extra--action">{actionButton}</div>
         </div>
     );
-}
+};
 
 function getSeverityURL(urls) {
     if (!urls)
@@ -227,7 +233,7 @@ class UpdateItem extends React.Component {
     render() {
         const info = this.props.info;
 
-        var bugs = null;
+        let bugs = null;
         if (info.bug_urls && info.bug_urls.length) {
             // we assume a bug URL ends with a number; if not, show the complete URL
             bugs = insertCommas(info.bug_urls.map(url => (
@@ -237,7 +243,7 @@ class UpdateItem extends React.Component {
             ));
         }
 
-        var cves = null;
+        let cves = null;
         if (info.cve_urls && info.cve_urls.length) {
             cves = insertCommas(info.cve_urls.map(url => (
                 <a key={url} href={url} rel="noopener noreferrer" target="_blank">
@@ -246,7 +252,7 @@ class UpdateItem extends React.Component {
             ));
         }
 
-        var errata = null;
+        let errata = null;
         if (info.vendor_urls) {
             errata = insertCommas(info.vendor_urls.filter(url => url.indexOf("/errata/") > 0).map(url => (
                 <a key={url} href={url} rel="noopener noreferrer" target="_blank">
@@ -257,46 +263,46 @@ class UpdateItem extends React.Component {
                 errata = null; // simpler testing below
         }
 
-        var secSeverityURL = getSeverityURL(info.vendor_urls);
-        var secSeverity = secSeverityURL ? secSeverityURL.slice(secSeverityURL.indexOf("#") + 1) : null;
-        var iconClasses = PK.getSeverityIcon(info.severity, secSeverity);
-        var type;
+        let secSeverityURL = getSeverityURL(info.vendor_urls);
+        const secSeverity = secSeverityURL ? secSeverityURL.slice(secSeverityURL.indexOf("#") + 1) : null;
+        const iconClasses = PK.getSeverityIcon(info.severity, secSeverity);
+        let type;
         if (info.severity === PK.Enum.INFO_SECURITY) {
             if (secSeverityURL)
                 secSeverityURL = <a rel="noopener noreferrer" target="_blank" href={secSeverityURL}>{secSeverity}</a>;
             type = (
                 <>
-                    <OverlayTrigger overlay={ <Tooltip id="tip-severity">{ secSeverity || _("security") }</Tooltip> } placement="top">
+                    <Tooltip id="tip-severity" content={ secSeverity || _("security") }>
                         <span className={iconClasses}>&nbsp;</span>
-                    </OverlayTrigger>
+                    </Tooltip>
                     { (info.cve_urls && info.cve_urls.length > 0) ? info.cve_urls.length : "" }
                 </>);
         } else {
             const tip = (info.severity >= PK.Enum.INFO_NORMAL) ? _("bug fix") : _("enhancement");
             type = (
                 <>
-                    <OverlayTrigger overlay={ <Tooltip id="tip-severity">{tip}</Tooltip> } placement="top">
+                    <Tooltip id="tip-severity" content={tip}>
                         <span className={iconClasses}>&nbsp;</span>
-                    </OverlayTrigger>
+                    </Tooltip>
                     { bugs ? info.bug_urls.length : "" }
                 </>);
         }
 
-        var pkgList = this.props.pkgNames.map(n => (
-            <OverlayTrigger key={n.name + n.arch} overlay={ <Tooltip id="tip-summary">{packageSummaries[n.name] + " (" + n.arch + ")"}</Tooltip> } placement="top">
+        const pkgList = this.props.pkgNames.map(n => (
+            <Tooltip key={n.name + n.arch} id="tip-summary" content={packageSummaries[n.name] + " (" + n.arch + ")"}>
                 <span>{n.name}</span>
-            </OverlayTrigger>)
+            </Tooltip>)
         );
-        var pkgs = insertCommas(pkgList);
-        var pkgsTruncated = pkgs;
+        const pkgs = insertCommas(pkgList);
+        let pkgsTruncated = pkgs;
         if (pkgList.length > 4)
             pkgsTruncated = insertCommas(pkgList.slice(0, 4).concat("…"));
 
-        var descriptionFirstLine = (info.description || "").trim();
+        let descriptionFirstLine = (info.description || "").trim();
         if (descriptionFirstLine.indexOf("\n") >= 0)
             descriptionFirstLine = descriptionFirstLine.slice(0, descriptionFirstLine.indexOf("\n"));
         descriptionFirstLine = cleanupChangelogLine(descriptionFirstLine);
-        var description;
+        let description;
         if (info.markdown) {
             descriptionFirstLine = <span dangerouslySetInnerHTML={{ __html: this.remarkable.render(descriptionFirstLine) }} />;
             description = <div dangerouslySetInnerHTML={{ __html: this.remarkable.render(info.description) }} />;
@@ -304,7 +310,7 @@ class UpdateItem extends React.Component {
             description = <div className="changelog">{info.description}</div>;
         }
 
-        var details = null;
+        let details = null;
         if (this.state.expanded) {
             details = (
                 <tr className="listing-ct-panel">
@@ -349,15 +355,15 @@ class UpdateItem extends React.Component {
     }
 }
 
-function UpdatesList(props) {
-    var updates = [];
+const UpdatesList = ({ updates }) => {
+    const update_ids = [];
 
     // PackageKit doesn"t expose source package names, so group packages with the same version and changelog
     // create a reverse version+changes → [id] map on iteration
-    var sameUpdate = {};
-    var packageNames = {};
-    Object.keys(props.updates).forEach(id => {
-        const u = props.updates[id];
+    const sameUpdate = {};
+    const packageNames = {};
+    Object.keys(updates).forEach(id => {
+        const u = updates[id];
         // did we already see the same version and description? then merge
         const hash = u.version + u.description;
         const seenId = sameUpdate[hash];
@@ -367,15 +373,15 @@ function UpdatesList(props) {
             // this is a new update
             sameUpdate[hash] = id;
             packageNames[id] = [{ name: u.name, arch: u.arch }];
-            updates.push(id);
+            update_ids.push(id);
         }
     });
 
     // sort security first
-    updates.sort((a, b) => {
-        if (props.updates[a].severity === PK.Enum.INFO_SECURITY && props.updates[b].severity !== PK.Enum.INFO_SECURITY)
+    update_ids.sort((a, b) => {
+        if (updates[a].severity === PK.Enum.INFO_SECURITY && updates[b].severity !== PK.Enum.INFO_SECURITY)
             return -1;
-        if (props.updates[a].severity !== PK.Enum.INFO_SECURITY && props.updates[b].severity === PK.Enum.INFO_SECURITY)
+        if (updates[a].severity !== PK.Enum.INFO_SECURITY && updates[b].severity === PK.Enum.INFO_SECURITY)
             return 1;
         return a.localeCompare(b);
     });
@@ -391,10 +397,10 @@ function UpdatesList(props) {
                     <th scope="col">{_("Details")}</th>
                 </tr>
             </thead>
-            { updates.map(id => <UpdateItem key={id} pkgNames={packageNames[id].sort((a, b) => a.name > b.name)} info={props.updates[id]} />) }
+            { update_ids.map(id => <UpdateItem key={id} pkgNames={packageNames[id].sort((a, b) => a.name > b.name)} info={updates[id]} />) }
         </table>
     );
-}
+};
 
 class ApplyUpdates extends React.Component {
     constructor() {
@@ -502,7 +508,7 @@ const AskRestart = ({ onIgnore, onRestart, history }) => <>
                      paragraph={ _("Updated packages may require a restart to take effect.") }
                      action={ _("Restart Now") }
                      onAction={ onRestart}
-                     secondary={ <Button variant="secondary" onClick={onIgnore}>{_("Ignore")}</Button> } />
+                     secondary={ <Button variant="link" onClick={onIgnore}>{_("Ignore")}</Button> } />
 
     <div className="flow-list-blank-slate">
         <Expander title={_("Package information")}>
@@ -524,12 +530,20 @@ class OsUpdates extends React.Component {
             allowCancel: null,
             history: [],
             unregistered: false,
+            privileged: false,
             autoUpdatesEnabled: undefined
         };
         this.handleLoadError = this.handleLoadError.bind(this);
         this.handleRefresh = this.handleRefresh.bind(this);
         this.handleRestart = this.handleRestart.bind(this);
         this.loadUpdates = this.loadUpdates.bind(this);
+
+        superuser.addEventListener("changed", () => {
+            this.setState({ privileged: superuser.allowed });
+            // get out of error state when switching from unprivileged to privileged
+            if (superuser.allowed && this.state.state.indexOf("Error") >= 0)
+                this.loadUpdates();
+        });
     }
 
     componentDidMount() {
@@ -866,7 +880,7 @@ class OsUpdates extends React.Component {
             return (
                 <div className="pk-updates">
                     {unregisteredWarning}
-                    <AutoUpdates onInitialized={ enabled => this.setState({ autoUpdatesEnabled: enabled }) } />
+                    <AutoUpdates onInitialized={ enabled => this.setState({ autoUpdatesEnabled: enabled }) } privileged={this.state.privileged} />
                     <div id="available" className="pk-updates--header">
                         <h2 className="pk-updates--header--heading">{_("Available Updates")}</h2>
                         <div className="pk-updates--header--actions">
@@ -933,7 +947,7 @@ class OsUpdates extends React.Component {
 
             return (
                 <>
-                    <AutoUpdates onInitialized={ enabled => this.setState({ autoUpdatesEnabled: enabled }) } />
+                    <AutoUpdates onInitialized={ enabled => this.setState({ autoUpdatesEnabled: enabled }) } privileged={this.state.privileged} />
                     <EmptyStatePanel icon={CheckIcon} title={ _("System is up to date") } />
 
                     { // automatic updates are not tracked by PackageKit, hide history when they are enabled
@@ -988,5 +1002,7 @@ class OsUpdates extends React.Component {
 
 document.addEventListener("DOMContentLoaded", () => {
     document.title = cockpit.gettext(document.title);
+    moment.locale(cockpit.language);
+    init();
     ReactDOM.render(<OsUpdates />, document.getElementById("app"));
 });

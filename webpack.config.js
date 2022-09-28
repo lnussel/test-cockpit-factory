@@ -65,6 +65,7 @@ var info = {
         ],
         "playground/speed": [
             "playground/speed",
+            "playground/speed.css",
         ],
         "playground/test": [
             "playground/test",
@@ -77,6 +78,9 @@ var info = {
         ],
         "playground/notifications-receiver": [
             "playground/notifications-receiver.js",
+        ],
+        "playground/journal": [
+            "playground/journal.jsx",
         ],
 
         "realmd/domain": [
@@ -103,8 +107,8 @@ var info = {
         ],
 
         "systemd/services": [
-            "systemd/init.js",
-            "systemd/services.scss",
+            "systemd/services/services.jsx",
+            "systemd/services/services.scss",
         ],
         "systemd/logs": [
             "systemd/logs.js",
@@ -150,7 +154,6 @@ var info = {
         "lib/test-dummy",
         "lib/test-journal-renderer",
         "lib/test-machines",
-        "lib/test-patterns",
 
         "networkmanager/test-utils",
 
@@ -193,6 +196,7 @@ var info = {
         "playground/translate.html",
         "playground/preloaded.html",
         "playground/notifications-receiver.html",
+        "playground/journal.html",
 
         "selinux/setroubleshoot.html",
 
@@ -247,6 +251,9 @@ var section = process.env.ONLYDIR || null;
 
 /* A standard nodejs and webpack pattern */
 var production = process.env.NODE_ENV === 'production';
+
+/* development options for faster iteration */
+var eslint = process.env.ESLINT !== '0';
 
 /*
  * Note that we're avoiding the use of path.join as webpack and nodejs
@@ -348,6 +355,7 @@ info.tests.forEach(function(test) {
 var aliases = {
     "d3": "d3/d3.js",
     "moment": "moment/moment.js",
+    "font-awesome": path.resolve(nodedir, 'font-awesome-sass/assets/stylesheets'),
 };
 
 /* HACK: To get around redux warning about reminimizing code */
@@ -397,7 +405,7 @@ module.exports = {
         rules: [
             {
                 enforce: 'pre',
-                test: /\.(js|es6|jsx)$/,
+                test: eslint ? /\.(js|jsx)$/ : /dont.match.me/,
                 exclude: /\/node_modules\/.*\//, // exclude external dependencies
                 loader: "eslint-loader"
             },
@@ -412,27 +420,89 @@ module.exports = {
                 use: babel_loader
             },
             {
-                test: /\.(js|jsx|es6)$/,
+                test: /\.(js|jsx)$/,
                 // exclude external dependencies; it's too slow, and they are already plain JS except the above
                 exclude: /\/node_modules\/.*\//,
                 use: babel_loader
             },
+            /* HACK: remove unwanted fonts from PatternFly's css */
             {
-                test: /\.css$/,
+                test: /patternfly-cockpit.scss$/,
                 use: [
                     miniCssExtractPlugin.loader,
                     {
                         loader: 'css-loader',
-                        options: { url: false }
-                    }
-                ],
+                        options: {
+                            sourceMap: true,
+                            url: false,
+                        },
+                    },
+                    {
+                        loader: 'string-replace-loader',
+                        options: {
+                            multiple: [
+                                {
+                                    search: /src:url[(]"patternfly-icons-fake-path\/glyphicons-halflings-regular[^}]*/g,
+                                    replace: 'font-display:block; src:url("../base1/fonts/glyphicons.woff") format("woff");',
+                                },
+                                {
+                                    search: /src:url[(]"patternfly-fonts-fake-path\/PatternFlyIcons[^}]*/g,
+                                    replace: 'src:url("../base1/fonts/patternfly.woff") format("woff");',
+                                },
+                                {
+                                    search: /src:url[(]"patternfly-fonts-fake-path\/fontawesome[^}]*/,
+                                    replace: 'font-display:block; src:url("../base1/fonts/fontawesome.woff?v=4.2.0") format("woff");',
+                                },
+                                {
+                                    search: /src:url\("patternfly-icons-fake-path\/pficon[^}]*/g,
+                                    replace: 'src:url("../base1/fonts/patternfly.woff") format("woff");',
+                                },
+                                {
+                                    search: /@font-face[^}]*patternfly-fonts-fake-path[^}]*}/g,
+                                    replace: '',
+                                },
+                            ]
+                        },
+                    },
+                    {
+                        loader: 'sass-loader',
+                        options: {
+                            sassOptions: {
+                                includePaths: [
+                                    // Teach webpack to resolve these references in order to build PF3 scss
+                                    path.resolve(nodedir),
+                                    path.resolve(nodedir, 'font-awesome-sass', 'assets', 'stylesheets'),
+                                    path.resolve(nodedir, 'patternfly', 'dist', 'sass'),
+                                    path.resolve(nodedir, 'bootstrap-sass', 'assets', 'stylesheets'),
+                                ],
+                                outputStyle: 'compressed',
+                            },
+                            sourceMap: true,
+                        },
+                    },
+                ]
             },
             {
-                test: /\.scss$/,
+                test: /\.s?css$/,
+                exclude: /patternfly-cockpit.scss/,
                 use: [
                     miniCssExtractPlugin.loader,
-                    "css-loader",
-                    'sass-loader',
+                    {
+                        loader: 'css-loader',
+                        options: {
+                            sourceMap: true,
+                            url: false
+                        }
+                    },
+                    {
+                        loader: 'sass-loader',
+                        options: {
+                            sourceMap: true,
+                            sassOptions: {
+                                outputStyle: 'compressed',
+                            }
+                        }
+                    },
                     {
                         loader: 'sass-resources-loader',
                             // Make PF3 and PF4 variables globably accessible to be used by the components scss
@@ -454,8 +524,9 @@ module.exports = {
                 test: /\.css$/,
                 include: stylesheet => {
                     return (
+                        stylesheet.includes('@patternfly/react-styles/css/components/Table/') ||
                         stylesheet.includes('@patternfly/react-styles/css/components/Page/') ||
-                        stylesheet.includes('@patternfly/react-styles/css/components/Table/')
+                        stylesheet.includes('@patternfly/react-styles/css/components/Toolbar/')
                     );
                 },
                 use: ["null-loader"]

@@ -19,8 +19,7 @@
 import React from 'react';
 import PropTypes from 'prop-types';
 import cockpit from 'cockpit';
-import { OverlayTrigger, Tooltip } from "patternfly-react";
-import { Button } from "@patternfly/react-core";
+import { Button, Text, TextVariants, Tooltip } from "@patternfly/react-core";
 
 import { VCPUModal } from './vcpuModal.jsx';
 import MemoryModal from './vm/memoryModal.jsx';
@@ -80,7 +79,12 @@ class VmOverviewTabLibvirt extends React.Component {
         this.onAutostartChanged = this.onAutostartChanged.bind(this);
     }
 
+    componentWillUnmount() {
+        this._isMounted = false;
+    }
+
     componentDidMount() {
+        this._isMounted = true;
         getDomainCapabilities(this.props.vm.connectionName)
                 .done(domCaps => {
                     const parser = new DOMParser();
@@ -92,9 +96,10 @@ class VmOverviewTabLibvirt extends React.Component {
                     const osElem = domainCapabilities.getElementsByTagName("os") && domainCapabilities.getElementsByTagName("os")[0];
                     const loaderElems = osElem && osElem.getElementsByTagName("loader");
 
-                    this.setState({ loaderElems });
+                    if (this._isMounted)
+                        this.setState({ loaderElems });
                 })
-                .fail(ex => console.warn("getDomainCapabilities failed"));
+                .fail(() => console.warn("getDomainCapabilities failed"));
     }
 
     onAutostartChanged() {
@@ -211,39 +216,39 @@ class VmOverviewTabLibvirt extends React.Component {
                 const uefiPaths = this.getOVMFBinariesOnHost(this.state.loaderElems).filter(elem => elem !== undefined);
                 const firmwareLink = disabled => {
                     return (
-                        <div id={`${idPrefix}-firmware-tooltip`}>
+                        <span id={`${idPrefix}-firmware-tooltip`}>
                             <Button variant="link" isInline id={`${idPrefix}-firmware`} isDisabled={disabled} onClick={this.openFirmware}>
                                 {currentFirmware}
                             </Button>
-                        </div>
+                        </span>
                     );
                 };
 
                 if (vm.state != "shut off") {
                     if (vm.persistent) {
                         firmwareLinkWrapper = (
-                            <OverlayTrigger overlay={ <Tooltip id='firmware-edit-disabled-on-running'>{ _("Shut off the VM in order to edit firmware configuration") }</Tooltip> } placement='top'>
+                            <Tooltip id='firmware-edit-disabled-on-running' content={_("Shut off the VM in order to edit firmware configuration")}>
                                 {firmwareLink(true)}
-                            </OverlayTrigger>
+                            </Tooltip>
                         );
                     } else {
                         firmwareLinkWrapper = (
-                            <OverlayTrigger overlay={ <Tooltip id='firmware-edit-disabled-on-transient'>{ _("Transient VMs don't support editting firmware configuration") }</Tooltip> } placement='top'>
+                            <Tooltip id='firmware-edit-disabled-on-transient' content={_("Transient VMs don't support editting firmware configuration")}>
                                 {firmwareLink(true)}
-                            </OverlayTrigger>
+                            </Tooltip>
                         );
                     }
                 } else if (!supportsUefiXml(this.state.loaderElems[0])) {
                     firmwareLinkWrapper = (
-                        <OverlayTrigger overlay={ <Tooltip id='missing-uefi-support'>{ _("Libvirt or hypervisor does not support UEFI") }</Tooltip> } placement='top'>
+                        <Tooltip id='missing-uefi-support' content={_("Libvirt or hypervisor does not support UEFI")}>
                             {firmwareLink(true)}
-                        </OverlayTrigger>
+                        </Tooltip>
                     );
                 } else if (uefiPaths.length == 0) {
                     firmwareLinkWrapper = (
-                        <OverlayTrigger overlay={ <Tooltip id='missing-uefi-images'>{ _("Libvirt did not detect any UEFI/OVMF firmware image installed on the host") }</Tooltip> } placement='top'>
+                        <Tooltip id='missing-uefi-images' content={_("Libvirt did not detect any UEFI/OVMF firmware image installed on the host")}>
                             {firmwareLink(true)}
-                        </OverlayTrigger>
+                        </Tooltip>
                     );
                 } else {
                     firmwareLinkWrapper = firmwareLink(false);
@@ -255,8 +260,9 @@ class VmOverviewTabLibvirt extends React.Component {
             <>
                 <div className="overview-tab-grid">
                     <div className='ct-form'>
-                        <label className='control-label label-title'> {_("General")} </label>
-                        <span />
+                        <Text component={TextVariants.h4} className='ct-form-full'>
+                            {_("General")}
+                        </Text>
                         <label className='control-label' htmlFor={`${idPrefix}-memory-count`}>{_("Memory")}</label>
                         {memoryLink}
                         <label className='control-label' htmlFor={`${idPrefix}-vcpus-count`}>{_("vCPUs")}</label>
@@ -271,8 +277,9 @@ class VmOverviewTabLibvirt extends React.Component {
                         </>}
                     </div>
                     <div className="ct-form">
-                        <label className='control-label label-title'> {_("Hypervisor Details")} </label>
-                        <span />
+                        <Text component={TextVariants.h4} className='ct-form-full'>
+                            {_("Hypervisor Details")}
+                        </Text>
                         <label className='control-label' htmlFor={`${idPrefix}-emulated-machine`}>{_("Emulated Machine")}</label>
                         <div id={`${idPrefix}-emulated-machine`}>{vm.emulatedMachine}</div>
                         {firmwareLinkWrapper ? <label className='control-label' htmlFor={`${idPrefix}-firmware`}>{_("Firmware")}</label> : null}

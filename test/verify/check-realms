@@ -73,40 +73,15 @@ def hotp_token(secret, counter, digits=6, hash_alg=hashlib.sha1):
     return numbers[-digits:].rjust(digits, '0')
 
 
-@skipImage("No realmd available", "fedora-coreos")
-@skipImage("freeipa not currently available", "debian-testing", "ubuntu-2004")
-class TestRealms(MachineCase):
-    provision = {
-        "0": {"address": "10.111.113.1/20", "dns": "10.111.112.100"},
-        "services": {"image": "services", "memory_mb": 2048}
-    }
-
-    def setUp(self):
-        super().setUp()
-        self.op_address = "#realms-op-address"
-        self.op_admin = "#realms-op-admin"
-        self.op_admin_password = "#realms-op-admin-password"
-
-        # HACK: https://bugzilla.redhat.com/show_bug.cgi?id=1770159 FreeIPA regressed certificate lookup
-        self.machines["services"].execute("sed -i '/^nsslapd-tmpdir:/ a nsslapd-verify-filter-schema: off' /var/lib/ipa-data/etc/dirsrv/slapd-COCKPIT-LAN/dse.ldif")
-
-        self.machines['services'].execute("/run-freeipa")
-        self.domain_sel = "#system_information_domain_button"
-
-    def testIpa(self):
+class CommonTests:
+    def testQualifiedUsers(self):
         m = self.machine
         b = self.browser
 
-        # Tell realmd to enable domain-qualified logins; unqualified ones are covered in testIpaUnqualifiedUsers
+        # Tell realmd to enable domain-qualified logins; unqualified ones are covered in testUnqualifiedUsers
         m.execute("printf '[cockpit.lan]\\nfully-qualified-names = yes\\n'  >> /etc/realmd.conf")
 
-        m.execute("hostnamectl set-hostname x0.cockpit.lan")
         self.login_and_go("/system")
-
-        # Wait for DNS to work as expected.
-        # https://bugzilla.redhat.com/show_bug.cgi?id=1071356#c11
-        #
-        wait(lambda: m.execute("nslookup -type=SRV _ldap._tcp.cockpit.lan"))
 
         def wait_number_domains(n):
             if n == 0:
@@ -123,9 +98,9 @@ class TestRealms(MachineCase):
         with b.wait_timeout(180):
             b.set_val(self.op_address, "cockpit.lan")
             b.wait_text(".realms-op-address-error", "Contacted domain")
-            b.wait_attr(self.op_admin, "placeholder", 'e.g. "admin"')
-            b.set_val(self.op_admin, "admin")
-            b.set_val(self.op_admin_password, "foobarfoo")
+            b.wait_attr(self.op_admin, "placeholder", 'e.g. "%s"' % self.admin_user)
+            b.set_val(self.op_admin, self.admin_user)
+            b.set_val(self.op_admin_password, self.admin_password)
             b.wait_not_visible(".realms-op-leave-only-row")
             b.click(".realms-op-apply")
             b.wait_popdown("realms-op")
@@ -134,24 +109,248 @@ class TestRealms(MachineCase):
             wait_number_domains(1)
 
         # when joined to a domain, changing the hostname is fatal, so should be disabled
-        b.wait_present("#system_information_hostname_button[disabled]")
-        b.mouse("#system_information_hostname_tooltip", "mouseover")
-        b.wait_in_text(".tooltip-inner", "Host name should not be changed in a domain")
-        b.mouse("#system_information_hostname_tooltip", "mouseout")
-        b.wait_not_present(".tooltip-inner")
+        b.wait_not_present("#system_information_hostname_button")
 
         # should not have any leftover tickets from the joining
         m.execute("! klist")
-        m.execute("! su -c klist admin")
+        m.execute("! su -c klist " + self.admin_user)
         b.logout()
 
-        # validate Kerberos setup for ws
-        m.execute("echo foobarfoo | kinit -f admin@COCKPIT.LAN")
-        m.execute(script=WAIT_KRB_SCRIPT.format("admin@cockpit.lan"), timeout=300)
+        # change existing local "admin" home dir to domain "admin" user
+        m.execute("chown -R %s@cockpit.lan /home/admin" % self.admin_user)
+
+        # wait until IPA user works
+        m.execute('while ! su - -c "echo %s | sudo -S true" %s@cockpit.lan; do sleep 5; sss_cache -E || true; systemctl try-restart sssd; done' % (
+                  self.admin_password, self.admin_user), timeout=300)
+
+        # log in as domain admin and check that we can do privileged operations
+        b.login_and_go('/system/services#/systemd-tmpfiles-clean.timer', user='%s@cockpit.lan' % self.admin_user, password=self.admin_password)
+        b.wait_in_text("#statuses", "Running")
+        b.click(".service-top-panel .dropdown-kebab-pf button")
+        b.click(".service-top-panel .dropdown-menu a:contains('Stop')")
+        b.wait_in_text("#statuses", "Not running")
+        # stopping the unit may interrupt the D-Bus proxy inspection of that unit
+        self.allow_journal_messages(".*systemd1:.*systemd_2dtmpfiles_2dclean_2etimer: Timeout was reached")
+        b.logout()
+
+        # should also work with capitalized domain and lower-case user (fixed in PR #13934)
+        # need to change URL to actually reload the page
+        b.login_and_go('/system', user='%s@COCKPIT.LAN' % self.admin_user.lower(), password=self.admin_password)
+        b.go('/system/services#/systemd-tmpfiles-clean.timer')
+        b.enter_page('/system/services')
+        b.wait_in_text("#statuses", "Not running")
+        b.click(".service-top-panel .dropdown-kebab-pf button")
+        b.click(".service-top-panel .dropdown-menu a:contains('Start')")
+        b.wait_in_text("#statuses", "Running")
+        b.logout()
+
+        self.checkBackendSpecifics()
+
+        # change home directory ownership back to local user
+        m.execute("chown -R admin /home/admin")
+
+        # Test domain info (PR #11096), leave the domain
+        b.login_and_go("/system")
+        b.wait_in_text(self.domain_sel, "cockpit.lan")
+        b.click(self.domain_sel)
+        b.wait_popup("realms-op")
+        b.wait_text("#realms-op-info-domain", "cockpit.lan")
+        b.wait_text("#realms-op-info-login-format", "username@cockpit.lan")
+        b.wait_text("#realms-op-info-server-sw", self.expected_server_software)
+        b.wait_text("#realms-op-info-client-sw", "sssd")
+        # leave button should be hidden behind expander by default
+        b.wait_not_visible("button.realms-op-leave")
+        b.wait_not_visible("#realms-op-alert")
+        b.click("#realms-op-leave-toggle")
+        b.wait_visible("#realms-op-alert")
+        b.wait_visible("button.realms-op-leave")
+        b.click(".realms-op-leave")
+
+        b.wait_popdown("realms-op")
+        wait_number_domains(0)
+        # re-enables hostname changing
+        b.wait_present("#system_information_hostname_button:not([disabled])")
+
+        self.checkBackendSpecificCleanup()
+
+        # Sometimes with some versions of realmd the Leave operation
+        # from above is still active in the realmd daemon.  So we loop
+        # here until we get the expected error instead of "Already
+        # running another action".
+
+        tries = 0
+        while tries < 3:
+            # Send a wrong password
+            b.click(self.domain_sel)
+            b.wait_popup("realms-op")
+            b.set_val(self.op_address, "cockpit.lan")
+            b.wait_attr(self.op_admin, "placeholder", 'e.g. "%s"' % self.admin_user)
+            b.set_val(self.op_admin, self.admin_user)
+            b.set_val(self.op_admin_password, "foo")
+            b.click(".realms-op-apply")
+            b.wait_text_not(".realms-op-message", "")
+            error = b.text(".realms-op-message")
+            b.wait_not_visible(".realms-op-leave-only-row")
+            if not "Already running another action" in error:
+                # "More" link is part of the message component, so this looks a little funny here
+                if self.expected_server_software == 'active-directory':
+                    self.assertEqual(error, "Failed to join the domain More")
+                elif m.image in ["debian-stable"]:
+                    # older ipa-client releases have a less useful error message
+                    self.assertEqual(error, "Running ipa-client-install failed More")
+                else:
+                    self.assertEqual(error, "Password is incorrect More")
+                # "More" should be visible, and diagnostics not shown by default
+                b.wait_not_visible(".realms-op-diagnostics")
+                b.click(".realms-op-more-diagnostics")
+                # that hides the initial message and the More link
+                b.wait_not_visible(".realms-op-message")
+                b.wait_not_visible(".realms-op-more-diagnostics")
+                # and shows the raw log
+                b.wait_visible(".realms-op-diagnostics")
+                if self.expected_server_software == 'active-directory':
+                    b.wait_in_text(".realms-op-diagnostics", "Couldn't authenticate as: Administrator@COCKPIT.LAN")
+                else:
+                    b.wait_in_text(".realms-op-diagnostics", "ipa-client-install command failed")
+            b.click(".realms-op-cancel")
+            b.wait_popdown("realms-op")
+            if not "Already running another action" in error:
+                break
+            print("Another operation running, retry")
+            time.sleep(20)
+            tries += 1
+
+        # Try to join a non-existing domain
+        b.click(self.domain_sel)
+        b.wait_popup("realms-op")
+        b.set_val(self.op_address, "NOPE")
+        b.wait_text(".realms-op-address-error", "Domain NOPE could not be contacted")
+        b.wait_not_visible(".realms-op-address-spinner")
+        b.click(".realms-op-cancel")
+        b.wait_popdown("realms-op")
+
+        # Cancel a join
+        b.click(self.domain_sel)
+        b.wait_popup("realms-op")
+        b.set_val(self.op_address, "cockpit.lan")
+        b.wait_attr(self.op_admin, "placeholder", 'e.g. "%s"' % self.admin_user)
+        b.set_val(self.op_admin, self.admin_user)
+        b.set_val(self.op_admin_password, self.admin_password)
+        b.click(".realms-op-apply")
+        b.wait_visible(".realms-op-spinner")
+        b.click(".realms-op-cancel")
+        b.wait_popdown("realms-op")
+
+        self.allow_authorize_journal_messages()
+        self.allow_journal_messages(".*No authentication agent found.*")
+        self.allow_restart_journal_messages()
+        # sometimes polling for info and joining a domain creates this noise
+        self.allow_journal_messages('.*org.freedesktop.DBus.Error.Spawn.ChildExited.*')
+
+    def testUnqualifiedUsers(self):
+        m = self.machine
+        b = self.browser
+
+        # delete the local admin user, going to use the domain one instead
+        m.execute("userdel admin; systemctl try-restart sssd")
+
+        # Tell realmd to not enable domain-qualified logins
+        # (https://bugzilla.redhat.com/show_bug.cgi?id=1575538)
+        m.execute("printf '[cockpit.lan]\\nfully-qualified-names = no\\n'  >> /etc/realmd.conf")
+        m.execute("echo %s | realm join -vU %s cockpit.lan" % (self.admin_password, self.admin_user), timeout=300)
+
+        # wait until domain user works
+        m.execute('while ! su - -c "echo %s | sudo -S true" %s; do sleep 5; sss_cache -E || true; systemctl try-restart sssd; done' %
+                  (self.admin_password, self.admin_user), timeout=300)
+
+        # login should now work with the domain admin user
+        b.password = self.admin_password
+        self.login_and_go("/system", user=self.admin_user)
+        b.wait_in_text(self.domain_sel, "cockpit.lan")
+
+        # Show domain information
+        b.click(self.domain_sel)
+        b.wait_popup("realms-op")
+        b.wait_text("#realms-op-info-domain", "cockpit.lan")
+        b.wait_text("#realms-op-info-login-format", "username")  # no @domain
+        b.wait_text("#realms-op-info-server-sw", self.expected_server_software)
+        b.wait_text("#realms-op-info-client-sw", "sssd")
+        b.click(".realms-op-cancel")
+        b.wait_popdown("realms-op")
+
+        # should be able to run admin operations
+        b.go('/system/services#/systemd-tmpfiles-clean.timer')
+        b.enter_page('/system/services')
+
+        b.wait_in_text("#statuses", "Running")
+        b.click(".service-top-panel .dropdown-kebab-pf button")
+        b.click(".service-top-panel .dropdown-menu a:contains('Stop')")
+        b.wait_in_text("#statuses", "Not running")
+
+        b.go('/system')
+        b.enter_page('/system')
+        # shutdown button should be enabled and working
+        # it takes a while for the permission check to finish, it is always enabled at first
+        b.click("#overview #restart-button")
+
+        b.wait_popup("shutdown-dialog")
+        b.click("#shutdown-dialog .dropdown button")
+        b.click("a:contains('No Delay')")
+        b.click("#shutdown-dialog .modal-footer button:contains(Restart)")
+        b.switch_to_top()
+        b.wait_in_text(".curtains-ct h1", "Disconnected")
+        m.wait_reboot()
+
+        self.allow_authorize_journal_messages()
+        self.allow_journal_messages(".*No authentication agent found.*")
+        self.allow_restart_journal_messages()
+        # sometimes polling for info and joining a domain creates this noise
+        self.allow_journal_messages('.*org.freedesktop.DBus.Error.Spawn.ChildExited.*')
+
+
+@skipImage("No realmd available", "fedora-coreos")
+class TestRealms(MachineCase):
+    '''Common variables and tests for all supported domain backends'''
+
+    provision = {
+        "0": {"address": "10.111.113.1/20", "dns": "10.111.112.100"},
+        "services": {"image": "services", "memory_mb": 2048}
+    }
+
+    def setUp(self):
+        super().setUp()
+        self.op_address = "#realms-op-address"
+        self.op_admin = "#realms-op-admin"
+        self.op_admin_password = "#realms-op-admin-password"
+        self.domain_sel = "#system_information_domain_button"
+        self.machine.execute("hostnamectl set-hostname x0.cockpit.lan")
+
+
+@skipImage("freeipa not currently available", "debian-testing", "ubuntu-2004")
+class TestIPA(TestRealms, CommonTests):
+    def setUp(self):
+        super().setUp()
+        self.admin_user = "admin"
+        self.admin_password = "foobarfoo"
+        self.expected_server_software = "ipa"
+        self.machines['services'].execute("/run-freeipa")
+        # Wait for FreeIPA to come up and DNS to work as expected
+        # https://bugzilla.redhat.com/show_bug.cgi?id=1071356#c11
+        wait(lambda: self.machine.execute("nslookup -type=SRV _ldap._tcp.cockpit.lan"))
+
+    def checkBackendSpecifics(self):
+        '''Check domain backend specific integration'''
+
+        m = self.machine
+        b = self.browser
 
         # should have added SPN to ws keytab
         output = m.execute(['klist', '-k', '/etc/cockpit/krb5.keytab'])
         self.assertIn('HTTP/x0.cockpit.lan@COCKPIT.LAN', output)
+
+        # validate Kerberos setup for ws
+        m.execute("echo %s | kinit -f %s@COCKPIT.LAN" % (self.admin_password, self.admin_user))
+        m.execute(script=WAIT_KRB_SCRIPT.format("%s@cockpit.lan" % self.admin_user), timeout=300)
 
         # kerberos login should work
         output = m.execute(['curl', '-s', '--negotiate', '--delegation', 'always', '-u', ':', "-D", "-",
@@ -177,64 +376,26 @@ class TestRealms(MachineCase):
         m.stop_cockpit()
         m.start_cockpit()
 
-        # wait until IPA user works
-        m.execute('while ! su - -c "echo foobarfoo | sudo -S true" admin@cockpit.lan; do sleep 5; sss_cache -E || true; systemctl try-restart sssd; done',
-                  timeout=300)
-
-        # log in as IPA admin and check that we can do privileged operations
-        orig_password = b.password
-        b.password = 'foobarfoo'
-
-        self.login_and_go('/system/services#/systemd-tmpfiles-clean.timer', user='admin@cockpit.lan')
-        b.wait_in_text("#statuses", "Running")
-        b.click(".service-top-panel .dropdown-kebab-pf button")
-        b.click(".service-top-panel .dropdown-menu a:contains('Stop')")
-        b.wait_in_text("#statuses", "Not running")
-        b.logout()
-        b.password = orig_password
-        m.execute("chown -R admin /home/admin")
-
-        self.allow_authorize_journal_messages()
-        self.allow_journal_messages(".*No authentication agent found.*")
-
         # check respecting FreeIPA's/sssd's ssh known host keys; this requires the new
         # --privkey option of sss_ssh_knownhostproxy, thus only works on recent images
-        b.login_and_go("/dashboard")
+        b.login_and_go("/dashboard", user='%s@cockpit.lan' % self.admin_user, password=self.admin_password)
         b.click('#dashboard-add')
         b.wait_popup('dashboard_setup_server_dialog')
         b.set_val('#add-machine-address', 'x0.cockpit.lan')
-        b.wait_text('#dashboard_setup_server_dialog button:nth-of-type(2)', "Add")
-        b.click('#dashboard_setup_server_dialog button:nth-of-type(2)')
+        b.click('#dashboard_setup_server_dialog .modal-footer button:contains(Add)')
 
         # with --pubkey support this should Just Work, otherwise confirm fingerprint
         if '--pubkey' not in m.execute("sss_ssh_knownhostsproxy --help || true"):
             b.wait_in_text('#dashboard_setup_server_dialog', "Fingerprint")
-            b.click('#dashboard_setup_server_dialog button:nth-of-type(2)')
+            b.click('#dashboard_setup_server_dialog .modal-footer button:contains(Connect)')
         b.wait_popdown('dashboard_setup_server_dialog')
         b.wait_present("#dashboard-hosts a[data-address='x0.cockpit.lan']")
         b.logout()
 
-        # Test domain info (PR #11096), leave the domain
-        b.login_and_go("/system")
-        b.wait_in_text(self.domain_sel, "cockpit.lan")
-        b.click(self.domain_sel)
-        b.wait_popup("realms-op")
-        b.wait_text("#realms-op-info-domain", "cockpit.lan")
-        b.wait_text("#realms-op-info-login-format", "username@cockpit.lan")
-        b.wait_text("#realms-op-info-server-sw", "ipa")
-        b.wait_text("#realms-op-info-client-sw", "sssd")
-        # leave button should be hidden behind expander by default
-        b.wait_not_visible("button.realms-op-leave")
-        b.wait_not_visible("#realms-op-alert")
-        b.click("#realms-op-leave-toggle")
-        b.wait_visible("#realms-op-alert")
-        b.wait_visible("button.realms-op-leave")
-        b.click(".realms-op-leave")
+    def checkBackendSpecificCleanup(self):
+        '''Check domain backend specific integration after leaving domain'''
 
-        b.wait_popdown("realms-op")
-        wait_number_domains(0)
-        # re-enables hostname changing
-        b.wait_present("#system_information_hostname_button:not([disabled])")
+        m = self.machine
 
         # should have cleaned up ws keytab
         m.execute("! klist -k /etc/cockpit/krb5.keytab | grep COCKPIT.LAN")
@@ -243,83 +404,17 @@ class TestRealms(MachineCase):
         # should have stopped cert tracking
         wait(lambda: "status:" not in m.execute("ipa-getcert list"))
 
-        # Sometimes with some versions of realmd the Leave operation
-        # from above is still active in the realmd daemon.  So we loop
-        # here until we get the expected error instead of "Already
-        # running another action".
+    def testUnqualifiedUsers(self):
+        '''Extend the common test with 2FA login'''
 
-        tries = 0
-        while tries < 3:
-            # Send a wrong password
-            b.click(self.domain_sel)
-            b.wait_popup("realms-op")
-            b.set_val(self.op_address, "cockpit.lan")
-            b.wait_attr(self.op_admin, "placeholder", 'e.g. "admin"')
-            b.set_val(self.op_admin, "admin")
-            b.set_val(self.op_admin_password, "foo")
-            b.click(".realms-op-apply")
-            b.wait_text_not(".realms-op-message", "")
-            error = b.text(".realms-op-message")
-            b.wait_not_visible(".realms-op-leave-only-row")
-            if not "Already running another action" in error:
-                # More link is part of the message component, so this looks a little funny here
-                # also, older releases have a less useful error message
-                if m.image in ["ubuntu-1804", "debian-stable"]:
-                    self.assertEqual(error, "Running ipa-client-install failed More")
-                else:
-                    self.assertEqual(error, "Password is incorrect More")
-                # "More" should be visible, and diagnostics not shown by default
-                b.wait_not_visible(".realms-op-diagnostics")
-                b.click(".realms-op-more-diagnostics")
-                # that hides the initial message and the More link
-                b.wait_not_visible(".realms-op-message")
-                b.wait_not_visible(".realms-op-more-diagnostics")
-                # and shows the raw log; fixed in PR #13802
-                if m.image not in ["rhel-8-2-distropkg"]:
-                    b.wait_visible(".realms-op-diagnostics")
-                    b.wait_in_text(".realms-op-diagnostics", "ipa-client-install command failed")
-            b.click(".realms-op-cancel")
-            b.wait_popdown("realms-op")
-            if not "Already running another action" in error:
-                break
-            print("Another operation running, retry")
-            time.sleep(20)
-            tries += 1
-
-        # Try to join a non-existing domain
-        b.click(self.domain_sel)
-        b.wait_popup("realms-op")
-        b.set_val(self.op_address, "NOPE")
-        b.wait_text(".realms-op-address-error", "Domain NOPE could not be contacted")
-        b.wait_not_visible(".realms-op-address-spinner")
-        b.click(".realms-op-cancel")
-        b.wait_popdown("realms-op")
-
-        # Cancel a join
-        b.click(self.domain_sel)
-        b.wait_popup("realms-op")
-        b.set_val(self.op_address, "cockpit.lan")
-        b.wait_attr(self.op_admin, "placeholder", 'e.g. "admin"')
-        b.set_val(self.op_admin, "admin")
-        b.set_val(self.op_admin_password, "foobarfoo")
-        b.click(".realms-op-apply")
-        b.wait_visible(".realms-op-spinner")
-        b.click(".realms-op-cancel")
-        b.wait_popdown("realms-op")
-
-        self.allow_restart_journal_messages()
-        # sometimes polling for info and joining a domain creates this noise
-        self.allow_journal_messages('.*org.freedesktop.DBus.Error.Spawn.ChildExited.*')
-
-    def testIpaUnqualifiedUsers(self):
         m = self.machine
         b = self.browser
 
         # wait until FreeIPA started up
         out = self.machines['services'].execute("""docker exec -i freeipa sh -ec '
-            while ! echo foobarfoo | kinit -f admin; do sleep 5; done
+            while ! echo %s | kinit -f %s; do sleep 5; done
             while ! ipa user-find >/dev/null; do sleep 5; done'
-            """, timeout=300)
+            """ % (self.admin_password, self.admin_user), timeout=300)
 
         # set up "alice" user with HOTP; that won't affect existing users (admin)
         # https://access.redhat.com/documentation/en-us/red_hat_enterprise_linux/7/html/linux_domain_identity_authentication_and_policy_guide/otp
@@ -336,73 +431,13 @@ class TestRealms(MachineCase):
         # print("alice's HOTP key:", alice_hotp_key)
         alice_hotp_key = base64.b64decode(alice_hotp_key)
 
-        m.execute("hostnamectl set-hostname x0.cockpit.lan")
-
-        # Wait for DNS to work as expected.
-        # https://bugzilla.redhat.com/show_bug.cgi?id=1071356#c11
-        wait(lambda: m.execute("nslookup -type=SRV _ldap._tcp.cockpit.lan"))
-
-        # delete the local admin user, going to use the IPA one instead
-        m.execute("userdel admin; systemctl try-restart sssd")
-
-        # Tell realmd to not enable domain-qualified logins
-        # (https://bugzilla.redhat.com/show_bug.cgi?id=1575538)
-        m.execute("printf '[cockpit.lan]\\nfully-qualified-names = no\\n'  >> /etc/realmd.conf")
-        m.execute("echo foobarfoo | realm join -vU admin cockpit.lan")
-
-        # wait until IPA user works
-        m.execute('while ! su - -c "echo foobarfoo | sudo -S true" admin; do sleep 5; sss_cache -E || true; systemctl try-restart sssd; done',
-                  timeout=300)
-
-        # login should now work with the IPA admin user
-        b.password = 'foobarfoo'
-        self.login_and_go("/system")
-        b.wait_in_text(self.domain_sel, "cockpit.lan")
-
-        # Show domain information
-        b.click(self.domain_sel)
-        b.wait_popup("realms-op")
-        b.wait_text("#realms-op-info-domain", "cockpit.lan")
-        b.wait_text("#realms-op-info-login-format", "username")  # no @domain
-        b.wait_text("#realms-op-info-server-sw", "ipa")
-        b.wait_text("#realms-op-info-client-sw", "sssd")
-        b.click(".realms-op-cancel")
-        b.wait_popdown("realms-op")
-
-        # should be able to run admin operations
-        b.go('/system/services#/systemd-tmpfiles-clean.timer')
-        b.enter_page('/system/services')
-
-        b.wait_in_text("#statuses", "Running")
-        b.click(".service-top-panel .dropdown-kebab-pf button")
-        b.click(".service-top-panel .dropdown-menu a:contains('Stop')")
-        b.wait_in_text("#statuses", "Not running")
-
-        b.go('/system')
-        b.enter_page('/system')
-        # shutdown button should be enabled and working
-        # it takes a while for the permission check to finish, it is always enabled at first
-        b.click("#overview #restart-button")
-
-        b.wait_popup("shutdown-dialog")
-        b.wait_in_text("#shutdown-dialog button:nth-of-type(2)", 'Restart')
-        b.click("#shutdown-dialog .dropdown button")
-        b.click("a:contains('No Delay')")
-        b.click("#shutdown-dialog button:nth-of-type(2)")
-        b.switch_to_top()
-        b.wait_in_text(".curtains-ct h1", "Disconnected")
-        m.wait_reboot()
-
-        self.allow_authorize_journal_messages()
-        self.allow_restart_journal_messages()
-        # sometimes polling for info and joining a domain creates this noise
-        self.allow_journal_messages('.*org.freedesktop.DBus.Error.Spawn.ChildExited.*')
+        super().testUnqualifiedUsers()
 
         m.start_cockpit()
 
         # now try 2FA with OTP
         # This does not yet work with sssd < 2.2.2-1 on Debian/Ubuntu
-        if m.image in ["ubuntu-1804", "ubuntu-stable", "debian-stable"]:
+        if m.image in ["ubuntu-stable", "debian-stable"]:
             return
 
         # normal b.login_and_go() doesn't support 2FA
@@ -433,39 +468,32 @@ class TestRealms(MachineCase):
         b = self.browser
 
         # Disable sssd support in realmd
-
         m.execute("echo -e '[providers]\nsssd = no\n' >> /usr/lib/realmd/realmd-distro.conf")
 
-        m.execute("hostnamectl set-hostname x0.cockpit.lan")
         self.login_and_go("/system")
-
-        # Wait for DNS to work as expected.
-        # https://bugzilla.redhat.com/show_bug.cgi?id=1071356#c11
-        #
-        wait(lambda: m.execute("nslookup -type=SRV _ldap._tcp.cockpit.lan"))
 
         # Join cockpit.lan
         b.click(self.domain_sel)
         b.wait_popup("realms-op")
         b.set_val(self.op_address, "cockpit.lan")
         b.wait_in_text(".realms-op-address-error", "Domain cockpit.lan is not supported")
-        b.set_val(self.op_admin, "admin")
-        b.set_val(self.op_admin_password, "foobarfoo")
+        b.set_val(self.op_admin, self.admin_user)
+        b.set_val(self.op_admin_password, self.admin_password)
         b.click(".realms-op-apply")
         b.wait_text(".realms-op-message", "Joining this domain is not supported")
 
-        self.allow_journal_messages(".*couldn't introspect /org/freedesktop/realmd.*")
+        self.allow_journal_messages(".*couldn't introspect /org/freedesktop/realmd.*",
+                                    "sudo: unable to resolve host x0.cockpit.lan: Name or service not known")
 
-    @skipImage("RHEL 8.0 does not yet have the necessary SELinux policy updates", "centos-8-stream")
     def testClientCertAuthentication(self):
         m = self.machine
 
         ipa_machine = self.machines['services']
         # need to wait for IPA to start up
         ipa_machine.execute("""docker exec -i freeipa sh -ec '
-            while ! echo foobarfoo | kinit -f admin; do sleep 5; done
+            while ! echo %s | kinit -f %s; do sleep 5; done
             export LC_ALL=C.UTF-8 && while ! ipa user-find >/dev/null; do sleep 5; done'
-            """, timeout=300)
+            """ % (self.admin_password, self.admin_user), timeout=300)
         # set up an IPA user with a TLS certificate; can't use "admin" due to https://pagure.io/freeipa/issue/6683
         ipa_machine.execute(r"""docker exec -i freeipa sh -exc '
 CERTUSER=jane
@@ -489,20 +517,14 @@ for s in key p12 pem; do docker cp freeipa:jane.$s .; done
         m.upload([jane_key, jane_pem], "/var/tmp")
 
         # On older Debian/Ubuntu D-Bus activation of ifp is disabled, enable it manually; see https://bugs.debian.org/925026
-        static_ifp_conf = m.image in ["debian-stable", "ubuntu-1804"]
+        static_ifp_conf = m.image in ["debian-stable"]
         if static_ifp_conf:
             m.write("/etc/sssd/conf.d/ifp.conf", "[sssd]\nservices = nss, sudo, pam, ssh, ifp\n")
             m.execute("chmod 600 /etc/sssd/conf.d/ifp.conf")
 
-        m.execute("hostnamectl set-hostname x0.cockpit.lan")
-
-        # Wait for DNS to work as expected.
-        # https://bugzilla.redhat.com/show_bug.cgi?id=1071356#c11
-        wait(lambda: m.execute("nslookup -type=SRV _ldap._tcp.cockpit.lan"))
-
         # join domain, wait until it works
         m.execute("printf '[cockpit.lan]\\nfully-qualified-names = no\\n'  >> /etc/realmd.conf")
-        m.execute("echo foobarfoo | realm join -vU admin cockpit.lan")
+        m.execute("echo %s | realm join -vU %s cockpit.lan" % (self.admin_password, self.admin_user), timeout=300)
         m.execute('while ! id jane; do sleep 5; systemctl restart sssd; done', timeout=300)
 
         # ensure sssd certificate lookup works
@@ -526,8 +548,14 @@ for s in key p12 pem; do docker cp freeipa:jane.$s .; done
                 self.assertNotIn(s, output)
 
             if session_leader:
-                out = m.execute('loginctl show-user --property=Sessions jane')
-                sessions = out.split('=')[1].split()
+                tries = 0
+                while tries < 10:
+                    out = m.execute('loginctl show-user --property=Sessions jane')
+                    sessions = out.split('=')[1].split()
+                    if len(sessions) == 1:
+                        break
+                    time.sleep(5)
+                    tries += 1
                 self.assertEqual(len(sessions), 1)
                 out = m.execute('loginctl session-status ' + sessions[0])
                 self.assertIn(session_leader, out)
@@ -539,6 +567,9 @@ for s in key p12 pem; do docker cp freeipa:jane.$s .; done
                 m.execute("while loginctl show-user jane; do sleep 1; done")
 
             m.stop_cockpit()
+
+        self.allow_journal_messages("jane is not allowed to run sudo on x0.  This incident will be reported.")
+        self.allow_authorize_journal_messages()
 
         # cert auth should not be enabled by default
         do_test(['--cert', '/var/tmp/jane.pem', '--key', '/var/tmp/jane.key'],
@@ -599,6 +630,39 @@ for s in key p12 pem; do docker cp freeipa:jane.$s .; done
             m.execute("mv /etc/sssd/conf.d/ifp.conf.disabled /etc/sssd/conf.d/ifp.conf && systemctl restart sssd")
         else:
             m.execute("systemctl unmask sssd-ifp")
+
+
+@skipImage("adcli not on test images", "debian-stable", "debian-testing", "ubuntu-stable", "ubuntu-2004")
+class TestAD(TestRealms, CommonTests):
+    def setUp(self):
+        super().setUp()
+        self.admin_user = "Administrator"
+        self.admin_password = "foobarFoo123"
+        self.expected_server_software = "active-directory"
+        self.machines['services'].execute("/run-samba-domain")
+        # Wait for AD to come up and DNS to work as expected
+        wait(lambda: self.machine.execute("nslookup -type=SRV _ldap._tcp.cockpit.lan"))
+        # DNS is not sufficient yet, needs to start LDAP server as well
+        self.machine.execute("until nc -z f0.cockpit.lan 389; do sleep 1; done")
+        # also wait for Kerberos
+        self.machine.execute("set -e; until echo %s | kinit %s@COCKPIT.LAN; do sleep 1; done; kdestroy" % (self.admin_password, self.admin_user))
+
+        # allow sudo access to domain admins; FIXME: Is there a server-side setting for this,
+        # similar to "ipa-advise enable-admins-sudo"?
+        self.machine.write("/etc/sudoers.d/domain-admins", r"%domain\ admins@COCKPIT.LAN ALL=(ALL) ALL")
+
+    def checkBackendSpecifics(self):
+        '''Check domain backend specific integration'''
+
+        pass
+
+    def checkBackendSpecificCleanup(self):
+        '''Check domain backend specific integration after leaving domain'''
+
+        pass
+
+    def testQualifiedUsers(self):
+        super().testQualifiedUsers()
 
 
 JOIN_SCRIPT = """
@@ -726,12 +790,11 @@ class TestKerberos(MachineCase):
         b.wait_popup('troubleshoot-dialog')
 
         b.set_val("#add-machine-address", "bad-user@x0.cockpit.lan")
-        b.wait_text('#troubleshoot-dialog button:nth-of-type(2)', "Add")
-        b.click('#troubleshoot-dialog button:nth-of-type(2)')
+        b.click('#troubleshoot-dialog .modal-footer button:contains(Add)')
         # with --pubkey support the fingerprint is already known, otherwise confirm fingerprint
         if '--pubkey' not in m.execute("sss_ssh_knownhostsproxy --help || true"):
             b.wait_in_text('#troubleshoot-dialog', "Fingerprint")
-            b.click('#troubleshoot-dialog button:nth-of-type(2)')
+            b.click('#troubleshoot-dialog .modal-footer button:contains(Connect)')
         b.wait_in_text('#troubleshoot-dialog h4', "Log in to")
         b.click("#login-type button")
         b.click("#login-type li[value=stored] a")
@@ -741,7 +804,7 @@ class TestKerberos(MachineCase):
         b.wait_in_text("#login-available", "Kerberos Ticket")
         b.wait_not_present("#login-available .empty")
         b.set_val("#login-custom-user", "")
-        b.click('#troubleshoot-dialog button:nth-of-type(2)')
+        b.click('#troubleshoot-dialog .modal-footer button:contains(Log In)')
 
         b.wait_popdown('troubleshoot-dialog')
         b.enter_page("/system/terminal", host="x0.cockpit.lan")
@@ -767,6 +830,13 @@ class TestKerberos(MachineCase):
         self.assertIn('"csrf-token"', output)
         self.allow_restart_journal_messages()
 
+        m.execute("printf '[Negotiate]\naction = none\n' >> /etc/cockpit/cockpit.conf")
+        m.restart_cockpit()
+        output = m.execute(['/usr/bin/curl', '-s', '--negotiate', '--delegation', 'always', '-u', ':', "-D", "-",
+                            '--resolve', 'x0.cockpit.lan:9090:10.111.113.1',
+                            'http://x0.cockpit.lan:9090/cockpit/login'])
+        self.assertIn("HTTP/1.1 401 Authentication disabled", output)
+
 
 @skipImage("Package (un)install does not work on OSTree", "fedora-coreos")
 class TestPackageInstall(packagelib.PackageCase):
@@ -784,9 +854,9 @@ class TestPackageInstall(packagelib.PackageCase):
         with b.wait_timeout(4):
             def check():
                 try:
-                    b.mouse("#system_information_domain_tooltip", "mouseover")
-                    b.wait_in_text(".tooltip-inner", text)
-                    b.mouse("#system_information_domain_tooltip", "mouseout")
+                    b.mouse("#system_information_domain_tooltip", "mouseenter")
+                    b.wait_in_text("div.pf-c-tooltip", text)
+                    b.mouse("#system_information_domain_tooltip", "mouseleave")
                     return True
                 except (RuntimeError, Error):
                     return False
@@ -815,7 +885,7 @@ class TestPackageInstall(packagelib.PackageCase):
 
         b.click(self.domain_sel)
         b.wait_in_text(".modal-dialog:contains('Install Software')", "realmd is not available")
-        b.wait_present(".modal-dialog:contains('Install Software') .modal-footer button:nth-of-type(2):disabled")
+        b.wait_present(".modal-dialog:contains('Install Software') .modal-footer button:contains(Install):disabled")
         b.click(".modal-dialog:contains('Install Software') .modal-footer button.cancel")
         b.wait_not_present(".modal-dialog:contains('Install Software')")
         b.logout()
@@ -832,7 +902,7 @@ class TestPackageInstall(packagelib.PackageCase):
         self.waitTooltip("requires installation of realmd")
 
         b.click(self.domain_sel)
-        b.click(".modal-dialog:contains('Install Software') .modal-footer button:nth-of-type(2)")
+        b.click(".modal-dialog:contains('Install Software') .modal-footer button:contains(Install)")
         b.wait_not_present(".modal-dialog:contains('Install Software')")
 
         # the stub package doesn't provide a realmd D-Bus service, so the "join

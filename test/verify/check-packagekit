@@ -45,8 +45,8 @@ class NoSubManCase(PackageCase):
         # Disable Subscription Manager on RHEL for these tests; subscriptions are tested in a separate class
         # On other OSes (Fedora/CentOS) we expect sub-man to be disabled in yum, so it should not get in the way there
         if self.machine.image.startswith("rhel") or self.machine.image.startswith("centos-8"):
-            self.machine.execute("mv /usr/libexec/rhsmd /usr/libexec/rhsmd.disabled; pkill -e rhsmd || true")
-            self.addCleanup(self.machine.execute, "mv /usr/libexec/rhsmd.disabled /usr/libexec/rhsmd")
+            self.machine.execute("mv /usr/libexec/rhsm-service /usr/libexec/rhsm-service.disabled; pkill -e rhsm-service || true")
+            self.addCleanup(self.machine.execute, "mv /usr/libexec/rhsm-service.disabled /usr/libexec/rhsm-service")
 
         # expected journal messages from enabling/disabling auto upgrade services
         self.allow_journal_messages("(Created symlink|Removed).*dnf-automatic-install.timer.*")
@@ -87,10 +87,10 @@ class TestUpdates(NoSubManCase):
                 self.assertEqual(b.text(row + "th > span:nth-of-type(%i)" % idx), pkg)
         else:
             self.assertEqual(b.text(row + "th span"), pkgname)
-            b.mouse(row + "th span", "mouseover")
-            b.wait_text("div.tooltip", "dummy " + pkgname + " (" + arch + ")")
-            b.mouse(row + "th span", "mouseout")
-            b.wait_not_present("div.tooltip")
+            b.mouse(row + "th span", "mouseenter")
+            b.wait_text("div.pf-c-tooltip", "dummy " + pkgname + " (" + arch + ")")
+            b.mouse(row + "th span", "mouseleave")
+            b.wait_not_present("div.pf-c-tooltip")
         self.assertEqual(b.text(row + "td:nth-of-type(2)"), version)
         # verify type
         self.assertTrue(b.is_present(row + "td:nth-of-type(3) span." + severity_to_icon[severity]))
@@ -130,6 +130,8 @@ class TestUpdates(NoSubManCase):
         # no security updates, no changelogs
         b = self.browser
         m = self.machine
+
+        self.enable_preload("packagekit", "index")
 
         m.start_cockpit()
         b.login_and_go("/system")
@@ -213,8 +215,7 @@ class TestUpdates(NoSubManCase):
         # update should succeed and show restart page; cancel
         b.wait_in_text("#app .container-fluid h1", "Restart Recommended")
         self.assertEqual(b.text("#app .container-fluid button.pf-m-primary"), "Restart Now")
-        self.assertEqual(b.text("#app .container-fluid button.pf-m-secondary"), "Ignore")
-        b.click("#app .container-fluid button.pf-m-secondary")
+        b.click("#app .container-fluid button.pf-m-link:contains('Ignore')")
 
         # should go back to updates overview, nothing pending any more
         b.wait_in_text("#state", "No updates pending")
@@ -298,10 +299,10 @@ class TestUpdates(NoSubManCase):
             self.assertIn("RHSA-2000:0002", details)
             # icon has critical class
             self.assertIn("severity-critical", b.attr(sel + " td.type span", "class"))
-            b.mouse(sel + " td.type span", "mouseover")
-            b.wait_text("div.tooltip", "critical")
-            b.mouse(sel + " td.type span", "mouseout")
-            b.wait_not_present("div.tooltip")
+            b.mouse(sel + " td.type span", "mouseenter")
+            b.wait_text("div.pf-c-tooltip", "critical")
+            b.mouse(sel + " td.type span", "mouseleave")
+            b.wait_not_present("div.pf-c-tooltip")
             # details has link to severity definition
             self.assertIn("access.redhat.com", b.attr(sel + " .listing-ct-body dd.severity a:first-of-type", "href"))
 
@@ -311,12 +312,12 @@ class TestUpdates(NoSubManCase):
         ch = b.eval_js('document.querySelector("%s").innerHTML' % (sel + " td.changelog"))
         self.assertNotIn("<li>", ch)
         self.assertNotIn("*", ch)
-        # should show bug fix icon and tooltip
+        # should show bug fix icon and pf-c-tooltip
         self.assertIn("fa-bug", b.attr(sel + " td.type span", "class"))
-        b.mouse(sel + " td.type span", "mouseover")
-        b.wait_text("div.tooltip", "bug fix")
-        b.mouse(sel + " td.type span", "mouseout")
-        b.wait_not_present("div.tooltip")
+        b.mouse(sel + " td.type span", "mouseenter")
+        b.wait_text("div.pf-c-tooltip", "bug fix")
+        b.mouse(sel + " td.type span", "mouseleave")
+        b.wait_not_present("div.pf-c-tooltip")
 
         # norefs: just changelog, show both binary packages
         sel = self.check_nth_update(5, ["norefs-bin", "norefs-doc"], "2-1", self.enhancement_severity,
@@ -361,7 +362,7 @@ class TestUpdates(NoSubManCase):
         assertHistory("ul", ["secdeclare", "secparse", "sevcritical"])
 
         # ignore restarting
-        b.click("#app .container-fluid button.pf-m-secondary")
+        b.click("#app .container-fluid button.pf-m-link:contains('Ignore')")
 
         # should have succeeded; 3 non-security updates left
         b.wait_in_text("#state", "3 updates")
@@ -391,7 +392,7 @@ class TestUpdates(NoSubManCase):
 
         # should have succeeded and show restart
         b.wait_in_text("#app .container-fluid h1", "Restart Recommended")
-        b.wait_present("#app .container-fluid button.pf-m-secondary")
+        b.wait_present("#app .container-fluid button.pf-m-link:Contains('Ignore')")
 
         # new versions are now installed
         m.execute("test -f /stamp-norefs-bin-2-1 && test -f /stamp-norefs-doc-2-1")
@@ -599,6 +600,48 @@ class TestUpdates(NoSubManCase):
         b.wait_text(self.update_text, "Loading available updates failed")
         self.assertIn("exclamation", b.attr(self.update_icon, "class"))
 
+    def testUnprivileged(self):
+        b = self.browser
+        m = self.machine
+
+        self.createPackage("vanilla", "1.0", "1", install=True)
+        self.createPackage("vanilla", "2.0", "2")
+        self.enableRepo()
+        m.execute("pkcon refresh")
+
+        # getting update info is allowed to all users
+        self.login_and_go("/updates", superuser=False)
+        b.wait_text("#state", "1 update")
+        b.wait_in_text("#available h2", "Available Updates")
+
+        # but applying updates is not; FIXME: this is a crappy UX
+        b.click("#app .container-fluid button")
+        b.wait_text("#state", "Applying updates failed")
+        b.wait_in_text(".container-fluid pre", "authentication")
+
+        # become superuser
+        b.switch_to_top()
+        b.click("#super-user-indicator button")
+        b.wait_in_text(".modal-dialog:contains('Administrative access')", "Please authenticate")
+        b.set_input_text(".modal-dialog:contains('Administrative access') input", "foobar")
+        b.click(".modal-dialog button:contains('Authenticate')")
+        b.wait_not_present(".modal-dialog:contains('Administrative access')")
+        b.wait_text("#super-user-indicator", "Administrative access")
+
+        # page adjusts automatically to privilege change
+        b.switch_to_frame("cockpit1:localhost/updates")
+        b.wait_text("#state", "1 update")
+        b.wait_in_text("#available h2", "Available Updates")
+
+        # applying updates works now
+        b.click("#app .container-fluid button")
+
+        b.wait_in_text("#app .container-fluid h1", "Restart Recommended")
+        self.assertEqual(b.text("#app .container-fluid button.pf-m-primary"), "Restart Now")
+        b.click("#app .container-fluid button.pf-m-link:contains('Ignore')")
+
+        # should go back to updates overview, nothing pending any more
+        b.wait_in_text("#state", "No updates pending")
 
 @skipImage("Image uses OSTree", "fedora-coreos")
 class TestWsUpdate(NoSubManCase):
@@ -639,7 +682,7 @@ class TestWsUpdate(NoSubManCase):
 
         # should have succeeded and show restart page; cancel
         b.wait_in_text("#app .container-fluid h1", "Restart Recommended")
-        b.click("#app .container-fluid button.pf-m-secondary")
+        b.click("#app .container-fluid button.pf-m-link:contains('Ignore')")
         b.wait_in_text("#state", "No updates pending")
 
         # now pretend that there is a newer cockpit-ws available, warn about disconnect
@@ -663,7 +706,7 @@ class TestWsUpdate(NoSubManCase):
 
 @skipImage("Image uses OSTree", "fedora-coreos")
 @skipImage("No subscriptions", "debian-stable", "debian-testing", "fedora-31", "centos-8-stream",
-           "fedora-32", "fedora-testing", "ubuntu-1804", "ubuntu-2004", "ubuntu-stable")
+           "fedora-32", "fedora-testing", "ubuntu-2004", "ubuntu-stable")
 class TestUpdatesSubscriptions(PackageCase):
     provision = {
         "0": {"address": "10.111.112.1/20", "dns": "10.111.112.1"},
@@ -802,6 +845,7 @@ class TestAutoUpdates(NoSubManCase):
         super().setUp()
         # not implemented for yum and apt yet, only dnf
         self.supported_backend = self.backend in ["dnf"]
+        self.addCleanup(self.machine.execute, "systemctl disable --now dnf-automatic-install.timer 2>/dev/null; rm -rf /etc/systemd/system/dnf-automatic-*")
 
     def testBasic(self):
         b = self.browser
@@ -910,6 +954,13 @@ class TestAutoUpdates(NoSubManCase):
         assertType("all")
         assertTimer("21", "Thu")
 
+        # page should parse it correctly from the timer
+        b.logout()
+        b.login_and_go("/updates")
+        b.wait_present("#automatic .onoff-ct input:checked")
+        b.wait_in_text("#auto-update-day", "Thursday")
+        b.wait_in_text("#auto-update-time", "21:00")
+
         # change back to daily
         b.set_val("#auto-update-day", "")
         wait_pending()
@@ -992,6 +1043,52 @@ class TestAutoUpdates(NoSubManCase):
         else:
             raise NotImplementedError(self.backend)
 
+    def testPrivilegeChange(self):
+        b = self.browser
+        m = self.machine
+
+        m.execute("pkcon refresh")
+
+        self.login_and_go("/updates", superuser=False)
+
+        if not self.supported_backend:
+            self.assertFalse(b.is_present("#automatic"))
+            self.assertFalse(b.is_present("#auto-update-type"))
+            return
+
+        # detecting auto updates configuration works unprivileged, but changing does not
+        b.wait_present("#automatic .onoff-ct input:disabled:not(:checked)")
+
+        # become superuser
+        b.switch_to_top()
+        b.click("#super-user-indicator button")
+        b.wait_in_text(".modal-dialog:contains('Administrative access')", "Please authenticate")
+        b.set_input_text(".modal-dialog:contains('Administrative access') input", "foobar")
+        b.click(".modal-dialog button:contains('Authenticate')")
+        b.wait_not_present(".modal-dialog:contains('Administrative access')")
+        b.wait_text("#super-user-indicator", "Administrative access")
+        b.switch_to_frame("cockpit1:localhost/updates")
+
+        # enable auto-updates
+        b.wait_present("#automatic .onoff-ct input:not(:checked)")
+        b.wait_not_present("#auto-update-type")
+        b.click("#automatic .onoff-ct input")
+        b.wait_present("#automatic .onoff-ct input:checked")
+        b.wait_present("#auto-update-type:not(:disabled)")
+
+        # Drop privileges
+        b.switch_to_top()
+        b.click("#super-user-indicator button")
+        b.click(".modal-dialog:contains('Switch to limited access') button:contains('Limit access')")
+        b.wait_not_present(".modal-dialog:contains('Switch to limited access')")
+        b.wait_text("#super-user-indicator", "Limited access")
+        b.switch_to_frame("cockpit1:localhost/updates")
+
+        # auto-update status still visible, but disabled
+        b.wait_present("#automatic .onoff-ct input:checked")
+        b.wait_present("#automatic .onoff-ct input:disabled")
+        b.wait_present("#auto-update-type:disabled")
+
     def checkUpgradeRebootDnf(self):
         """part of testWithAvailableUpdates() for dnf backend"""
 
@@ -1047,7 +1144,7 @@ class TestAutoUpdatesInstall(NoSubManCase):
         b.click("#app .container-fluid button.pk-update--all")
 
         # empty state visible in main area
-        b.click('.container-fluid .pf-c-empty-state button.pf-m-secondary')
+        b.click('.container-fluid .pf-c-empty-state button.pf-m-link')
         self.assertFalse(b.is_present("#available"))
         if self.backend == 'dnf':
             b.is_present('#automatic')
@@ -1055,7 +1152,7 @@ class TestAutoUpdatesInstall(NoSubManCase):
             # on-demand installation isn't supported
             self.assertFalse(b.is_present('#automatic'))
 
-    @skipImage("No supported auto update backend", "debian-stable", "debian-testing", "ubuntu-1804", "ubuntu-2004", "ubuntu-stable")
+    @skipImage("No supported auto update backend", "debian-stable", "debian-testing", "ubuntu-2004", "ubuntu-stable")
     def testInstall(self):
         b = self.browser
         m = self.machine

@@ -16,9 +16,14 @@ or root.
 ## Building
 
 The `build` script will build the `cockpit/unit-tests` and
-`cockpit/unit-tests:i386` containers.  It should be run as root.
+`cockpit/unit-tests:i386` containers.
 
 ## Running tests
+
+You need to disable SELinux with `sudo setenforce 0` for this. There is no
+other way for the container to access the files in your build tree (do *not*
+use the `--volume` `:Z` option, as that will destroy the file labels on the
+host).
 
 Tests in that container get started with the `start` script.  By default, this
 script runs the unit tests on amd64.  The script accepts a number of arguments

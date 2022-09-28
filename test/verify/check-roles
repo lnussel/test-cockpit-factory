@@ -45,21 +45,19 @@ class TestRoles(MachineCase):
         b.expect_load()
         b.enter_page("/system")
         b.switch_to_top()
-        b.wait_text('#content-user-name', 'User')
+        b.wait_text('#current-username', 'user')
 
-        # Check permissions for own account
-        b.click('#content-user-name')
-        b.click('#go-account')
+        b.go("/users#/user")
         b.enter_page("/users")
 
         admin_role_sel = 'input[data-name="%s"]' % m.get_admin_group()
 
         b.wait_text("#account-user-name", "user")
         b.wait_present("#account-locked[disabled]")
-        b.wait_present('#account-real-name-wrapper[disabled]')
+        b.wait_present('output#account-real-name')
         b.wait_present("#account-set-password:not([disabled])")
-        b.wait_present("#account-delete[disabled]")
-        b.wait_present("#account-logout[disabled]")
+        b.wait_not_present("#account-delete")
+        b.wait_not_present("#account-logout")
         b.wait_present(admin_role_sel + "[disabled]")
         b.wait_present(admin_role_sel + ":not(:checked)")
 
@@ -67,10 +65,10 @@ class TestRoles(MachineCase):
         b.go("#/admin")
         b.wait_text("#account-user-name", "admin")
         b.wait_present("#account-locked[disabled]")
-        b.wait_present('#account-real-name-wrapper[disabled]')
-        b.wait_present("#account-set-password[disabled]")
-        b.wait_present("#account-delete[disabled]")
-        b.wait_present("#account-logout[disabled]")
+        b.wait_present('output#account-real-name')
+        b.wait_not_present("#account-set-password")
+        b.wait_not_present("#account-delete")
+        b.wait_not_present("#account-logout")
         b.wait_present(admin_role_sel + "[disabled]")
         b.wait_present(admin_role_sel + ":checked")
 
@@ -82,14 +80,14 @@ class TestRoles(MachineCase):
         m.execute("usermod -a -G %s user" % m.get_admin_group())
         b.wait_present(admin_role_sel + ":checked")
 
-        b.relogin("/users", "user")
+        b.relogin("/users", "user", superuser=True)
         b.wait_text("#account-user-name", "user")
 
         # Check permissions for admin again
         b.go("#/admin")
         b.wait_text("#account-user-name", "admin")
         b.wait_present("#account-locked:not([disabled])")
-        b.wait_present("#account-real-name-wrapper:not([disabled])")
+        b.wait_present("input#account-real-name")
         b.wait_present("#account-set-password:not([disabled])")
         b.wait_present("#account-delete:not([disabled])")
         # admin is not logged in, thus still disabled

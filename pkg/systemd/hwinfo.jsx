@@ -17,9 +17,11 @@
  * along with Cockpit; If not, see <http://www.gnu.org/licenses/>.
  */
 
+import '../../src/base1/patternfly-cockpit.scss';
+import 'polyfills'; // once per application
+
 import cockpit from "cockpit";
 import moment from 'moment';
-import '../lib/polyfills.js'; // once per application
 import React from "react";
 import ReactDOM from 'react-dom';
 
@@ -218,11 +220,11 @@ class CPUSecurityMitigationsDialog extends React.Component {
                         title={this.state.alert} />}
                 </Modal.Body>
                 <Modal.Footer>
-                    <Button variant='secondary' className='btn-cancel' isDisabled={this.state.rebooting} onClick={this.close}>
-                        { _("Cancel") }
-                    </Button>
                     <Button variant='danger' isDisabled={this.state.rebooting || this.state.nosmt === undefined} onClick={this.saveAndReboot}>
                         { _("Save and reboot") }
+                    </Button>
+                    <Button variant='link' className='btn-cancel' isDisabled={this.state.rebooting} onClick={this.close}>
+                        { _("Cancel") }
                     </Button>
                 </Modal.Footer>
             </Modal>

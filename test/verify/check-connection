@@ -33,22 +33,63 @@ class TestConnection(MachineCase):
         if "debian" in self.machine.image or "ubuntu" in self.machine.image:
             self.ws_executable = "/usr/lib/cockpit/cockpit-ws"
 
+    def ostree_setup_ws(self):
+        '''Overlay cockpit-ws package on OSTree image
+
+        Disable the cockpit/ws container. This is for tests that don't work with the container,
+        and to make sure that overlaying cockpit-ws works as well.
+        '''
+        m = self.machine
+        if not m.ostree_image:
+            return
+
+        # uninstall cockpit/ws container startup script
+        m.execute("rm /etc/systemd/system/cockpit.service")
+        # overlay cockpit-ws rpm
+        m.execute("rpm-ostree install --cache-only /var/tmp/build-results/cockpit-ws-*.rpm")
+        m.spawn("sync && sync && sync && sleep 0.1 && reboot", "reboot")
+        m.wait_reboot()
+
     @skipBrowser("Firefox cannot work with cookies", "firefox")
     def testBasic(self):
-        b = self.browser
         m = self.machine
 
-        m.start_cockpit()
+        # always test with the default ws install (container on OSTree, package everywhere else)
+        self.check_basic_with_start_stop(m.start_cockpit, m.stop_cockpit)
+
+        # on OSTree, also check with overlaid cockpit-ws rpm
+        if m.ostree_image:
+            def ws_start():
+                m.execute(r"""set -e;
+                    mkdir -p /etc/systemd/system/cockpit.service.d/ &&
+                    printf "[Service]\nExecStart=\n%s --no-tls" `grep ExecStart= /lib/systemd/system/cockpit.service` \
+                            > /etc/systemd/system/cockpit.service.d/notls.conf
+                    systemctl daemon-reload
+                    systemctl start cockpit.socket""")
+
+            def ws_stop():
+                m.execute("systemctl stop cockpit cockpit.socket")
+
+            self.ostree_setup_ws()
+            # HACK: Getting SELinux errors with just rpm-ostree install; there's a plethora of failures, so just allow them all
+            m.execute("setenforce 0")
+            self.allow_journal_messages('audit.*avc:  denied .*')
+            self.check_basic_with_start_stop(ws_start, ws_stop)
+
+    def check_basic_with_start_stop(self, start_cockpit, stop_cockpit):
+        m = self.machine
+        b = self.browser
+        start_cockpit()
 
         # take cockpit-ws down on the login page
         b.open("/system")
         b.wait_visible("#login")
         b.set_val("#login-user-input", "admin")
         b.set_val("#login-password-input", "foobar")
-        m.stop_cockpit()
+        stop_cockpit()
         b.click('#login-button')
         b.wait_text_not('#login-fatal-message', "")
-        m.start_cockpit()
+        start_cockpit()
         b.reload()
         b.wait_visible("#login")
         b.set_val("#login-user-input", "admin")
@@ -63,11 +104,11 @@ class TestConnection(MachineCase):
         self.assertFalse(cookie["secure"])
 
         # take cockpit-ws down on the server page
-        m.stop_cockpit()
+        stop_cockpit()
         b.switch_to_top()
         b.wait_in_text(".curtains-ct h1", "Disconnected")
 
-        m.start_cockpit()
+        start_cockpit()
         b.click("#machine-reconnect")
         b.expect_load()
         b.wait_visible("#login")
@@ -330,17 +371,14 @@ class TestConnection(MachineCase):
 
         check_cert_chain()
 
-        # *.crt file also works; added in PR #13388
-        if m.image not in ["rhel-8-2-distropkg"]:
-            m.execute ("mv /etc/cockpit/ws-certs.d/cert-chain.cert /etc/cockpit/ws-certs.d/cert-chain.crt")
-            check_cert_chain()
+        # *.crt file also works
+        m.execute ("mv /etc/cockpit/ws-certs.d/cert-chain.cert /etc/cockpit/ws-certs.d/cert-chain.crt")
+        check_cert_chain()
 
-        # separate *.key file instead of merged .cert; added in PR #13388
-        if m.image not in ["rhel-8-2-distropkg"]:
-            m.execute("sed -n '/---BEGIN PRIVATE KEY/,$ p' /etc/cockpit/ws-certs.d/cert-chain.crt > /etc/cockpit/ws-certs.d/cert-chain.key")
-            m.execute("sed -i '/---BEGIN PRIVATE KEY/,$ d' /etc/cockpit/ws-certs.d/cert-chain.crt")
-            check_cert_chain()
-
+        # separate *.key file instead of merged .cert
+        m.execute("sed -n '/---BEGIN PRIVATE KEY/,$ p' /etc/cockpit/ws-certs.d/cert-chain.crt > /etc/cockpit/ws-certs.d/cert-chain.key")
+        m.execute("sed -i '/---BEGIN PRIVATE KEY/,$ d' /etc/cockpit/ws-certs.d/cert-chain.crt")
+        check_cert_chain()
 
         # login handler: correct password
         m.execute("curl -k -c cockpit.jar -s --head --header 'Authorization: Basic {}' https://127.0.0.1:9090/cockpit/login".format(
@@ -349,6 +387,8 @@ class TestConnection(MachineCase):
         self.assertIn(
             "default-src 'self' https://127.0.0.1:9090; connect-src 'self' https://127.0.0.1:9090 wss://127.0.0.1:9090", headers)
         self.assertIn("Access-Control-Allow-Origin: https://127.0.0.1:9090", headers)
+        # CORP is also set for dynamic paths
+        self.assertIn("Cross-Origin-Resource-Policy: same-origin", headers)
 
         self.allow_journal_messages(
             ".*Peer failed to perform TLS handshake",
@@ -465,8 +505,7 @@ class TestConnection(MachineCase):
         self.assertIn('A Custom Title', m.execute('''curl -s -S -H "Authorization: Negotiate $(printf '%0.7000i' 1)" http://localhost:9000/'''))
 
         # Large requests are processed correctly with TLS
-        if m.image not in ["rhel-8-2-distropkg"]:  # fixed in PR #13351
-            self.assertIn('A Custom Title', m.execute('''curl -s -S -k -H "Authorization: Negotiate $(printf '%0.7000i' 1)" https://localhost:9000/'''))
+        self.assertIn('A Custom Title', m.execute('''curl -s -S -k -H "Authorization: Negotiate $(printf '%0.7000i' 1)" https://localhost:9000/'''))
 
         # Large requests are processed correctly with plain HTTP through cockpit-tls
         m.start_cockpit(tls=True)
@@ -483,6 +522,7 @@ class TestConnection(MachineCase):
         headers = m.execute("curl -s --head http://172.27.0.15:9090/cockpit/static/login.min.html")
         self.assertIn("HTTP/1.1 200 OK\r\n", headers)
         self.assertIn("Content-Type: text/html\r\n", headers)
+        self.assertIn("Cross-Origin-Resource-Policy: same-origin\r\n", headers)
         # login.html is not always accessible as a file (e. g. in Atomic), so just assert a reasonable content length
         self.assertIn("Content-Length: ", headers)
         length = int(headers.split('Content-Length: ', 1)[1].split()[0])
@@ -533,7 +573,7 @@ class TestConnection(MachineCase):
         rss = int(output.split(" ")[0])
 
         # This fails when flow control is not present
-        self.assertLess(rss, 200000)
+        self.assertLess(rss, 250000)
 
     @skipImage("OSTree doesn't have cockpit-ws", "fedora-coreos")
     def testLocalSession(self):
@@ -586,9 +626,8 @@ G_MESSAGES_DEBUG=all XDG_CONFIG_DIRS=/usr/local %s -p 9999 -a 127.0.0.90 --local
                  ),
                 ]
 
-        if m.image not in ["rhel-8-2-distropkg"]:
-             # remote ssh host; added in PR #13754
-             cases.append( (['/cockpit/@localhost/manifests.json test1@localhost'], ['"system"', '"Overview"', '"HACK"']) )
+        # remote ssh host
+        cases.append( (['/cockpit/@localhost/manifests.json test1@localhost'], ['"system"', '"Overview"', '"HACK"']) )
 
         # prepare fake ssh target; to verify that we really use that, override dashboard manifest
         m.execute("""set -e; useradd test1
@@ -621,11 +660,12 @@ G_MESSAGES_DEBUG=all XDG_CONFIG_DIRS=/usr/local %s -p 9999 -a 127.0.0.90 --local
 
         self.allow_journal_messages("couldn't register polkit authentication agent.*")
 
-    @skipImage("does not use cockpit-ws package", "fedora-coreos")
     @skipBrowser("Firefox needs proper cert and CA", "firefox")
     def testReverseProxy(self):
         m = self.machine
         b = self.browser
+
+        self.ostree_setup_ws()
 
         # set up a poor man's reverse TLS proxy with socat
         m.upload(["../src/bridge/mock-server.crt", "../src/bridge/mock-server.key"], "/tmp")

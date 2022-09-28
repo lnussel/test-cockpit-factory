@@ -22,7 +22,6 @@
 <title translate="yes">Dashboard</title>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <link href="../base1/patternfly.css" rel="stylesheet">
     <link href="dashboard.css" rel="stylesheet">
     <link href="../../static/branding.css" rel="stylesheet">
     <script src="../base1/jquery.js"></script>
@@ -89,7 +88,7 @@
                     <div class="panel-heading">
                         <h2 class="panel-title" translate>Servers</h2>
                         <div class="panel-actions">
-                            <button class="pf-c-button pf-m-secondary"
+                            <button class="pf-c-button pf-m-secondary servers-privileged"
                                 id="dashboard-enable-edit" aria-label="Edit Server" title="Edit Server">
                                 <span class="fa fa-check" />
                             </button>
@@ -183,9 +182,9 @@
                 </div>
                 </div>
                 <div class="modal-footer">
-                    <div class="pull-left"><a role="link" tabindex="0" id="host-edit-sync-users" translate="yes">Synchronize users</a></div>
-                    <button class="pf-c-button pf-m-secondary" data-dismiss="modal" translate="yes">Cancel</button>
                     <button class="pf-c-button pf-m-primary" id="host-edit-apply" translate="yes">Set</button>
+                    <button class="pf-c-button pf-m-link" data-dismiss="modal" translate="yes">Cancel</button>
+                    <div class="pull-right"><a role="link" tabindex="0" id="host-edit-sync-users" translate="yes">Synchronize users</a></div>
                 </div>
             </div>
         </div>

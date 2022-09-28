@@ -1,4 +1,21 @@
 #
+# Copyright (C) 2014-2020 Red Hat, Inc.
+#
+# Cockpit is free software; you can redistribute it and/or modify it
+# under the terms of the GNU Lesser General Public License as published by
+# the Free Software Foundation; either version 2.1 of the License, or
+# (at your option) any later version.
+#
+# Cockpit is distributed in the hope that it will be useful, but
+# WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
+# Lesser General Public License for more details.
+#
+# You should have received a copy of the GNU Lesser General Public License
+# along with Cockpit; If not, see <http://www.gnu.org/licenses/>.
+#
+
+#
 # This file is maintained at the following location:
 # https://github.com/cockpit-project/cockpit/blob/master/tools/cockpit.spec
 #
@@ -59,18 +76,16 @@ Summary:        Web Console for Linux servers
 License:        LGPL-2.1-or-later
 URL:            https://cockpit-project.org/
 
-Version:        215
+Version:        222
 %if %{defined wip}
 Release:        1.%{wip}%{?dist}
-Source0:        cockpit-%{version}.tar.gz
+Source0:        cockpit-%{version}.tar.xz
 %else
 Release:        0
 Source0:        https://github.com/cockpit-project/cockpit/releases/download/%{version}/cockpit-%{version}.tar.xz
 %endif
 Source1:       cockpit.pam
-# merged upstream after 215
-Patch:         0001-test-handle-XDG_CONFIG_DIRS.patch
-Patch1:        0001-openSUSE-Tumbleweed-branding.patch
+Source2:       cockpit-rpmlintrc
 
 BuildRequires: gcc
 BuildRequires: pkgconfig(gio-unix-2.0)
@@ -82,19 +97,19 @@ BuildRequires: autoconf automake
 BuildRequires: /usr/bin/python3
 BuildRequires: gettext >= 0.19.7
 %if %{defined build_dashboard}
-BuildRequires: libssh-devel >= 0.8
+BuildRequires: libssh-devel >= 0.8.5
 %endif
 BuildRequires: openssl-devel
 BuildRequires: gnutls-devel >= 3.4.3
 BuildRequires: zlib-devel
-BuildRequires: krb5-devel >= 1.11
+BuildRequires: pkgconfig(krb5) >= 1.11
 BuildRequires: libxslt-devel
 BuildRequires: glib-networking
 BuildRequires: sed
 
 BuildRequires: glib2-devel >= 2.37.4
 # this is for runtimedir in the tls proxy ace21c8879
-BuildRequires: systemd-devel >= 235
+BuildRequires: pkgconfig(libsystemd) >= 235
 %if 0%{?suse_version}
 BuildRequires: distribution-release
 BuildRequires: libpcp-devel
@@ -128,14 +143,13 @@ Recommends: cockpit-packagekit
 Suggests: cockpit-pcp
 
 %ifarch x86_64 %{arm} aarch64 ppc64le i686 s390x
-%if 0%{?fedora} == 31 && 0%{?build_optional}
+%if (0%{?fedora} == 31 || 0%{?suse_version}) && 0%{?build_optional}
 %define build_docker 1
 Recommends: (cockpit-docker if /usr/bin/docker)
 %endif
 %endif
 
 %if 0%{?rhel} == 0
-Recommends: cockpit-dashboard
 Recommends: (cockpit-networkmanager if NetworkManager)
 Suggests: cockpit-selinux
 %endif
@@ -166,7 +180,19 @@ make -j4 %{?extra_flags} all
 
 %check
 exec 2>&1
-make -j4 check
+# HACK: Fedora koji builders are very slow, unreliable, and inaccessible for debugging; https://github.com/cockpit-project/cockpit/issues/13909
+%if 0%{?fedora} >= 0
+%ifarch s390x
+%define testsuite_fail || true
+%endif
+%endif
+# HACK: RHEL i686 builders hang after running all tests; not a supported architecture, so don't bother
+%if 0%{?rhel} >= 8
+%ifarch i686
+%define testsuite_skip #
+%endif
+%endif
+%{?testsuite_skip} make -j4 check %{?testsuite_fail}
 
 %install
 make install DESTDIR=%{buildroot}
@@ -274,7 +300,7 @@ for pkg in apps dashboard docker machines packagekit pcp playground storaged; do
     rm -rf %{buildroot}/%{_datadir}/cockpit/$pkg
 done
 # files from -tests
-rm -r %{buildroot}/%{_prefix}/%{__lib}/cockpit-test-assets %{buildroot}/%{_sysconfdir}/cockpit/cockpit.conf
+rm -r %{buildroot}/%{_prefix}/%{__lib}/cockpit-test-assets
 # files from -pcp
 rm -r %{buildroot}/%{_libexecdir}/cockpit-pcp %{buildroot}/%{_localstatedir}/lib/pcp/
 # files from -machines
@@ -288,13 +314,18 @@ rm -f %{buildroot}/%{_prefix}/share/metainfo/org.cockpit-project.cockpit-docker.
 sed -i "s|%{buildroot}||" *.list
 
 %if 0%{?suse_version}
-# remove brandings that don't match the distro as they may contain
-# stale symlinks
+# remove brandings with stale symlinks. Means they don't match
+# the distro.
 pushd %{buildroot}/%{_datadir}/cockpit/branding
-ls -1 | (. /etc/os-release; grep -v "default\|$ID") | xargs rm -vr
+find -L * -type l -printf "%H\n" | sort -u | xargs rm -rv
+ln -s opensuse-tumbleweed opensuse-microos
 popd
 # need this in SUSE as post build checks dislike stale symlinks
 install -m 644 -D /dev/null %{buildroot}/run/cockpit/motd
+# remove files of not installable packages
+rm -r %{buildroot}%{_datadir}/cockpit/{machines,sosreport,selinux}
+rm -f %{buildroot}/%{_prefix}/share/metainfo/org.cockpit-project.cockpit-{machines,selinux,sosreport}.metainfo.xml
+rm -f %{buildroot}%{_datadir}/pixmaps/cockpit-sosreport.png
 %else
 %global _debugsource_packages 1
 %global _debuginfo_subpackages 0
@@ -411,6 +442,7 @@ Recommends: NetworkManager-team
 Recommends: setroubleshoot-server >= 3.3.3
 Provides: cockpit-selinux = %{version}-%{release}
 Provides: cockpit-sosreport = %{version}-%{release}
+Requires: sos
 %endif
 %if 0%{?fedora} >= 29
 # 0.7.0 (actually) supports task cancellation.
@@ -418,8 +450,8 @@ Provides: cockpit-sosreport = %{version}-%{release}
 Recommends: (reportd >= 0.7.1 if abrt)
 %endif
 # NPM modules which are also available as packages
-Provides: bundled(js-jquery) = 3.4.1
-Provides: bundled(js-moment) = 2.24.0
+Provides: bundled(js-jquery) = 3.5.1
+Provides: bundled(js-moment) = 2.25.3
 Provides: bundled(nodejs-flot) = 0.8.3
 Provides: bundled(xstatic-bootstrap-datepicker-common) = 1.9.0
 Provides: bundled(xstatic-patternfly-common) = 3.59.4
@@ -435,11 +467,13 @@ Summary: Cockpit Web Service
 Requires: glib-networking
 Requires: openssl
 Requires: glib2 >= 2.37.4
+Requires: group(wheel)
 Conflicts: firewalld < 0.6.0-1
 Recommends: sscg >= 2.3
 Recommends: system-logos
 Requires: systemd >= 235
 Suggests: sssd-dbus
+Requires(pre): permissions
 Requires(post): systemd
 Requires(preun): systemd
 Requires(postun): systemd
@@ -502,6 +536,8 @@ getent group cockpit-wsinstance >/dev/null || groupadd -r cockpit-wsinstance
 getent passwd cockpit-wsinstance >/dev/null || useradd -r -g cockpit-wsinstance -d /nonexisting -s /sbin/nologin -c "User for cockpit-ws instances" cockpit-wsinstance
 
 %post ws
+%set_permissions %{_libexecdir}/cockpit-session
+%tmpfiles_create cockpit-tempfiles.conf
 %systemd_post cockpit.socket
 # firewalld only partially picks up changes to its services files without this
 test -f %{_bindir}/firewall-cmd && firewall-cmd --reload --quiet || true
@@ -512,6 +548,9 @@ test -f %{_bindir}/firewall-cmd && firewall-cmd --reload --quiet || true
 %postun ws
 %systemd_postun_with_restart cockpit.socket
 %systemd_postun_with_restart cockpit.service
+
+%verifyscript ws
+%verify_permissions -e %{_libexecdir}/cockpit-session
 
 # -------------------------------------------------------------------------------
 # Sub-packages that are part of cockpit-system in RHEL/CentOS, but separate in Fedora
@@ -531,6 +570,7 @@ The Cockpit component for configuring kernel crash dumping.
 %files kdump -f kdump.list
 %{_datadir}/metainfo/org.cockpit-project.cockpit-kdump.metainfo.xml
 
+%if !0%{?suse_version}
 %package sosreport
 Summary: Cockpit user interface for diagnostic reports
 Requires: cockpit-bridge >= 122
@@ -545,6 +585,7 @@ sosreport tool.
 %files sosreport -f sosreport.list
 %{_datadir}/metainfo/org.cockpit-project.cockpit-sosreport.metainfo.xml
 %{_datadir}/pixmaps/cockpit-sosreport.png
+%endif
 
 %package networkmanager
 Summary: Cockpit user interface for networking, using NetworkManager
@@ -562,7 +603,7 @@ The Cockpit component for managing networking.  This package uses NetworkManager
 
 %endif
 
-%if 0%{?rhel} == 0
+%if 0%{?rhel} == 0 && !0%{?suse_version}
 
 %package selinux
 Summary: Cockpit SELinux package
@@ -622,7 +663,7 @@ The Cockpit component for managing storage.  This package uses udisks.
 Summary: Tests for Cockpit
 Requires: cockpit-bridge >= 138
 Requires: cockpit-system >= 138
-Requires: openssh-clients
+Requires: /usr/bin/ssh-agent /usr/bin/ssh-add
 Provides: cockpit-test-assets = %{version}-%{release}
 
 %description -n cockpit-tests
@@ -630,9 +671,9 @@ This package contains tests and files used while testing Cockpit.
 These files are not required for running Cockpit.
 
 %files -n cockpit-tests -f tests.list
-%config(noreplace) %{_sysconfdir}/cockpit/cockpit.conf
 %{_prefix}/%{__lib}/cockpit-test-assets
 
+%if !0%{?suse_version}
 %package -n cockpit-machines
 BuildArch: noarch
 Summary: Cockpit user interface for virtual machines
@@ -657,6 +698,7 @@ If "virt-install" is installed, you can also create new virtual machines.
 
 %files -n cockpit-machines -f machines.list
 %{_datadir}/metainfo/org.cockpit-project.cockpit-machines.metainfo.xml
+%endif
 
 %package -n cockpit-pcp
 Summary: Cockpit PCP integration
@@ -678,14 +720,13 @@ Cockpit support for reading PCP metrics and loading PCP archives.
 
 %if %{defined build_dashboard}
 %package -n cockpit-dashboard
-Summary: Cockpit remote servers and dashboard
+Summary: Cockpit remote server dashboard
 BuildArch: noarch
 Requires: cockpit-ssh >= 135
 Conflicts: cockpit-ws < 135
 
 %description -n cockpit-dashboard
-Cockpit support for connecting to remote servers (through ssh),
-bastion hosts, and a basic dashboard.
+Cockpit page for showing performance graphs for up to 20 remote servers.
 
 %files -n cockpit-dashboard -f dashboard.list
 
@@ -704,6 +745,7 @@ The Cockpit components for interacting with Docker and user interface.
 This package is not yet complete.
 
 %files -n cockpit-docker -f docker.list
+%dir %{_datadir}/cockpit/docker/images
 %{_datadir}/metainfo/org.cockpit-project.cockpit-docker.metainfo.xml
 %endif
 

@@ -22,17 +22,23 @@
 #include "common/cockpitframe.h"
 
 #include <ctype.h>
+#include <dirent.h>
 #include <fcntl.h>
+#include <inttypes.h>
+#include <sched.h>
 #include <stdarg.h>
 #include <stdlib.h>
-
+#include <stdnoreturn.h>
+#include <sys/mman.h>
+#include <sys/param.h>
 #include <sys/resource.h>
 #include <sys/wait.h>
-
-#include <dirent.h>
-#include <sched.h>
-#include <utmp.h>
 #include <time.h>
+#include <utmp.h>
+
+#ifndef _PATH_BTMP
+#define _PATH_BTMP "/var/log/btmp"
+#endif
 
 const char *program_name;
 struct passwd *pwd;
@@ -46,6 +52,91 @@ static char *auth_msg = NULL;
 static size_t auth_msg_size = 0;
 static FILE *authf = NULL;
 
+
+static bool
+char_needs_json_escape (char c)
+{
+  return c < ' ' || c == '\\' || c == '"';
+}
+
+static bool
+json_escape_char (FILE *stream,
+                  char c)
+{
+  if (c == '\\')
+    return fputs ("\\\\", stream) >= 0;
+  else if (c == '"')
+    return fputs ("\\\"", stream) >= 0;
+  else
+    return fprintf (stream, "\\u%04x", c) == 6;
+}
+
+static bool
+json_escape_string (FILE       *stream,
+                    const char *str,
+                    size_t      maxlen)
+{
+  size_t offset = 0;
+
+  while (offset < maxlen && str[offset])
+    {
+      size_t start = offset;
+
+      while (offset < maxlen && str[offset] && !char_needs_json_escape (str[offset]))
+        offset++;
+
+      /* print the non-escaped prefix, if there is one */
+      if (offset != start)
+        {
+          size_t length = offset - start;
+          if (fwrite (str + start, 1, length, stream) != length)
+            return false;
+        }
+
+      /* print the escaped character, if there is one */
+      if (offset < maxlen && str[offset])
+        {
+          if (!json_escape_char (stream, str[offset]))
+            return false;
+
+          offset++;
+        }
+    }
+
+  return true;
+}
+
+bool
+json_print_string_property (FILE       *stream,
+                            const char *key,
+                            const char *value,
+                            ssize_t     maxlen)
+{
+  size_t expected = strlen (key) + 7;
+
+  return fprintf (stream, ", \"%s\": \"", key) == expected &&
+         json_escape_string (stream, value, maxlen) &&
+         fputc ('"', stream) >= 0;
+}
+
+bool
+json_print_bool_property (FILE       *stream,
+                          const char *key,
+                          bool        value)
+{
+  size_t expected = 6 + strlen (key) + (value ? 4 : 5); /* "true" or "false" */
+
+  return fprintf (stream, ", \"%s\": %s", key, value ? "true" : "false") == expected;
+}
+
+bool
+json_print_integer_property (FILE       *stream,
+                             const char *key,
+                             uint64_t    value)
+{
+  /* too much effort to figure out the expected length exactly */
+  return fprintf (stream, ", \"%s\": %"PRIu64, key, value) > 6;
+}
 
 char *
 read_authorize_response (const char *what)
@@ -86,36 +177,14 @@ void
 write_control_string (const char *field,
                       const char *str)
 {
-  const unsigned char *at;
-  char buf[8];
-
-  if (!str)
-    return;
-
-  debug ("writing %s %s", field, str);
-  fprintf (authf, ",\"%s\":\"", field);
-  for (at = (const unsigned char *)str; *at; at++)
-    {
-      if (*at == '\\' || *at == '\"' || *at < 0x1f)
-        {
-          snprintf (buf, sizeof (buf), "\\u%04x", (int)*at);
-          fputs_unlocked (buf, authf);
-        }
-      else
-        {
-          fputc_unlocked (*at, authf);
-        }
-    }
-  fputc_unlocked ('\"', authf);
+  json_print_string_property (authf, field, str, -1);
 }
 
 void
 write_control_bool (const char *field,
-                      int val)
+                    bool        val)
 {
-  const char *str = val ? "true" : "false";
-  debug ("writing %s %s", field, str);
-  fprintf (authf, ",\"%s\":%s", field, str);
+  json_print_bool_property (authf, field, val);
 }
 
 void
@@ -336,7 +405,6 @@ int
 fork_session (char **env, int (*session)(char**))
 {
   int status;
-  int from;
 
   fflush (stderr);
   assert (pwd != NULL);
@@ -371,13 +439,6 @@ fork_session (char **env, int (*session)(char**))
 
       debug ("dropped privileges");
 
-      from = 3;
-      if (fdwalk (closefd, &from) < 0)
-        {
-          warnx ("couldn't close all file descirptors");
-          _exit (42);
-        }
-
       _exit (session (env));
     }
 
@@ -387,9 +448,195 @@ fork_session (char **env, int (*session)(char**))
   return status;
 }
 
+static bool
+do_lastlog (uid_t                 uid,
+            const struct timeval *now,
+            const char           *rhost,
+            time_t               *out_last_login,
+            FILE                 *messages)
+{
+  struct lastlog entry;
+  bool result = false;
+  int fd = -1;
+  ssize_t r;
+
+  fd = open (_PATH_LASTLOG, O_RDWR);
+  if (fd == -1)
+    {
+      warn ("failed to open %s", _PATH_LASTLOG);
+      goto out;
+    }
+
+  r = pread (fd, &entry, sizeof entry, uid * sizeof entry);
+  if (r == sizeof entry && entry.ll_time != 0)
+    {
+      /* got an entry for the user */
+
+      /* the ll_host and ll_line fields can be nul-terminated, but they
+       * can also extend to the full length of the field without
+       * nul-termination.  use the maxlen parameter to help with that.
+       */
+      if (!json_print_integer_property (messages, "last-login-time", entry.ll_time) ||
+          !json_print_string_property (messages, "last-login-host", entry.ll_host, UT_HOSTSIZE) ||
+          !json_print_string_property (messages, "last-login-line", entry.ll_line, UT_LINESIZE))
+        {
+          warnx ("failed to print last-login details to messages memfd");
+          goto out;
+        }
+
+      if (out_last_login)
+        *out_last_login = entry.ll_time;
+    }
+  else if (r == sizeof entry)
+    {
+      /* read the entry, but it's nul.  user never logged in. */
+      *out_last_login = 0;
+    }
+  else if (r == 0)
+    {
+      /* no such entry in file: never logged in? */
+      *out_last_login = 0;
+    }
+  else if (r < 0)
+    {
+      /* error */
+      warn ("failed to pread() %s for uid %u", _PATH_LASTLOG, (unsigned) uid);
+      goto out;
+    }
+  else
+    {
+      /* some other size (incomplete read) */
+      warnx ("incomplete pread() %s for uid %u: %zu of %zu bytes",
+             _PATH_LASTLOG, (unsigned) uid, r, sizeof entry);
+      goto out;
+    }
+
+  /* XXX: We'd really like to use strncpy() here, which is perfectly
+   * designed for what we need to do: copy a string up to N characters
+   * into a fixed width field, adding nul bytes if the string is shorter
+   * than N.
+   *
+   * Unfortunately, when you use it in this way, GCC is convinced that
+   * you don't know what you're doing and gives a warning that's very
+   * difficult to get rid of.  We tried using #pragma here before, but
+   * after several attempts, it was difficult to get the
+   * conditionalising (for the compiler version) correct.
+   *
+   * Let's just nul out the struct and use memcpy().  Sigh.
+   *
+   *  strncpy (entry.ll_host, rhost, sizeof entry.ll_host);
+   *  strncpy (entry.ll_line, "web console", sizeof entry.ll_line);
+   */
+  memset (&entry, 0, sizeof entry);
+  memcpy (entry.ll_host, rhost, MIN (strlen (rhost), sizeof entry.ll_host));
+  const char * const line = "web console";
+  memcpy (entry.ll_line, line, MIN (strlen (line), sizeof entry.ll_line));
+
+  entry.ll_time = now->tv_sec;
+
+  r = pwrite (fd, &entry, sizeof entry, uid * sizeof entry);
+  if (r == -1)
+    {
+      /* error */
+      warn ("failed to pwrite() %s for uid %u", _PATH_LASTLOG, (unsigned) uid);
+      goto out;
+    }
+  else if (r != sizeof entry)
+    {
+      /* incomplete write */
+      warnx ("incomplete pwrite() %s for uid %u: %zu or %zu bytes",
+             _PATH_LASTLOG, (unsigned) uid, r, sizeof entry);
+      goto out;
+    }
+
+  result = true;
+
+out:
+  if (fd != -1)
+    close (fd);
+
+  return result;
+}
+
+static bool
+scan_btmp (const char *username,
+           time_t      last_success,
+           FILE       *messages)
+{
+  bool success = false;
+  int fail_count = 0;
+  struct utmp last;
+  int fd;
+
+  fd = open (_PATH_BTMP, O_RDONLY | O_CLOEXEC);
+  if (fd == -1)
+    {
+      if (errno == ENOENT)
+        {
+          /* no btmp → no failed attempts */
+          success = true;
+          goto out;
+        }
+
+      warn ("open(%s) failed", _PATH_BTMP);
+      goto out;
+    }
+
+  while (true)
+    {
+      struct utmp entry;
+      ssize_t r;
+
+      do
+        r = read (fd, &entry, sizeof entry);
+      while (r == -1 && errno != EINTR);
+
+      if (r == 0)
+        break;
+
+      if (r < 0)
+        {
+          warn ("read(%s) failed", _PATH_BTMP);
+          goto out;
+        }
+      if (r != sizeof entry)
+        {
+          warnx ("read(%s) returned partial result (%zu of %zu bytes)",
+                 _PATH_BTMP, r, sizeof entry);
+          goto out;
+        }
+
+      if (entry.ut_tv.tv_sec > last_success &&
+          strncmp (entry.ut_user, username, sizeof entry.ut_user) == 0)
+        {
+          last = entry;
+          fail_count++;
+        }
+    }
+
+  if (fail_count == 0)
+    {
+      success = true;
+      goto out;
+    }
+
+  /* only print messages if we actually have failures */
+  success = json_print_integer_property (messages, "fail-count", fail_count) &&
+            json_print_integer_property (messages, "last-fail-time", last.ut_tv.tv_sec) &&
+            json_print_string_property (messages, "last-fail-host", last.ut_host, UT_HOSTSIZE) &&
+            json_print_string_property (messages, "last-fail-line", last.ut_line, UT_LINESIZE);
+
+out:
+  if (fd > -1)
+    close (fd);
+
+  return success;
+}
+
 void
 utmp_log (int login,
-          const char *rhost)
+          const char *rhost,
+          FILE *messages)
 {
   char id[UT_LINESIZE + 1];
   struct utmp ut;
@@ -431,6 +678,14 @@ utmp_log (int login,
   endutent ();
 
   updwtmp (_PATH_WTMP, &ut);
+
+  if (login)
+    {
+      time_t last_success;
+
+      if (do_lastlog (pwd->pw_uid, &tv, rhost, &last_success, messages))
+        scan_btmp (pwd->pw_name, last_success, messages);
+    }
 }
 
 int
@@ -520,6 +775,53 @@ fdwalk (int (*cb)(void *data, int fd),
 #endif /* HAVE_FDWALK */
 
 void
+btmp_log (const char *username,
+          const char *rhost)
+{
+  struct timeval tv;
+
+  /* the `tv` in the utmp struct is not actually a `struct timeval`, so
+   * we need to read into a temporary variable and then copy the fields.
+   */
+  gettimeofday (&tv, NULL);
+
+  struct utmp entry = {
+    .ut_line = "web console",
+    .ut_pid = getpid (),
+    .ut_tv.tv_sec = tv.tv_sec,
+    .ut_tv.tv_usec = tv.tv_usec,
+    .ut_type = LOGIN_PROCESS,
+  };
+
+  strncpy (entry.ut_host, rhost, sizeof entry.ut_host);
+  strncpy (entry.ut_user, username, sizeof entry.ut_user);
+
+  int fd = open (_PATH_BTMP, O_WRONLY | O_APPEND);
+  if (fd == -1)
+    {
+      warn ("open(%s) failed", _PATH_BTMP);
+      goto out;
+    }
+
+  ssize_t r = write (fd, &entry, sizeof entry);
+  if (r < 0)
+    {
+      warn ("write() %s failed", _PATH_BTMP);
+      goto out;
+    }
+  else if (r != sizeof entry)
+    {
+      warnx ("incomplete write() %s: %zu of %zu bytes",
+             _PATH_BTMP, r, sizeof entry);
+      goto out;
+    }
+
+out:
+  if (fd != -1)
+    close (fd);
+}
+
+void
 pass_to_child (int signo)
 {
   if (child > 0)
@@ -566,4 +868,101 @@ void
 authorize_logger (const char *data)
 {
   warnx ("%s", data);
+}
+
+FILE *
+open_memfd (const char *name)
+{
+  int fd = memfd_create ("cockpit login messages", MFD_ALLOW_SEALING);
+
+  if (fd == -1)
+    return NULL;
+
+  return fdopen (fd, "w");
+}
+
+bool
+seal_memfd (FILE *memfd)
+{
+  if (fflush (memfd) != 0)
+    return false;
+
+  const int seals = F_SEAL_SHRINK | F_SEAL_GROW | F_SEAL_WRITE;
+  return fcntl (fileno (memfd), F_ADD_SEALS, seals) == 0;
+}
+
+/* signal- and after-fork()-safe function to format a string, print it
+ * to stderr and abort execution.  Never returns.
+ */
+static noreturn void
+__attribute__ ((format (printf, 1, 2)))
+abort_with_message (const char *format,
+                    ...)
+{
+  char buffer[1024];
+  va_list ap;
+
+  va_start (ap, format);
+  size_t length = vsnprintf (buffer, sizeof buffer, format, ap);
+  va_end (ap);
+
+  size_t ofs = 0;
+  while (ofs != length)
+    {
+      ssize_t r;
+      do
+        r = write (STDERR_FILENO, buffer + ofs, length - ofs);
+      while (r == -1 && errno == EINTR);
+
+      if (0 <= r && r <= length - ofs)
+        ofs += r;
+      else
+        break; /* something went wrong, but we can't deal with it */
+    }
+
+  abort ();
+}
+
+/* signal- and after-fork()-safe function to remap file descriptors
+ * according to a specified array.  All other file descriptors are
+ * closed.
+ *
+ * Commonly used after fork() and before exec().
+ */
+void
+fd_remap (const int *remap_fds,
+          int        n_remap_fds)
+{
+  if (n_remap_fds < 0 || n_remap_fds > 1024)
+    abort_with_message ("requested to fd_remap() too many fds!");
+
+  int *fds = alloca (sizeof (int) * n_remap_fds);
+  memcpy (fds, remap_fds, sizeof (int) * n_remap_fds);
+
+  /* we need to get all of the remap-fds to be numerically above
+   * n_remap_fds in order to make sure that we don't overwrite them in
+   * the middle of the dup2() loop below, and also avoid the case that
+   * dup2() is a no-op (which could fail to clear the O_CLOEXEC flag,
+   * for example).
+   */
+  for (int i = 0; i < n_remap_fds; i++)
+    if (fds[i] != -1 && fds[i] < n_remap_fds)
+        {
+          int new_fd = fcntl (fds[i], F_DUPFD, n_remap_fds); /* returns >= n_remap_fds */
+
+          if (new_fd == -1)
+            abort_with_message ("fcntl(%d, F_DUPFD) failed: %m", fds[i]);
+
+          fds[i] = new_fd;
+        }
+
+  /* now we can map the fds into their final spot */
+  for (int i = 0; i < n_remap_fds; i++)
+    if (fds[i] != -1) /* no-op */
+      if (dup2 (fds[i], i) != i)
+        abort_with_message ("dup2(%d, %d) failed: %m", fds[i], i);
+
+  /* close everything else */
+  if (fdwalk (closefd, &n_remap_fds) < 0)
+    abort_with_message ("couldn't close all file descriptors");
 }

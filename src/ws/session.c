@@ -29,6 +29,7 @@
 
 static char *last_txt_msg = NULL;
 static char *conversation = NULL;
+static FILE *login_messages = NULL;
 
 /* This program opens a session for a given user and runs the bridge in
  * it.  It is used to manage localhost; for remote hosts sshd does
@@ -204,7 +205,7 @@ pam_conv_func (int num_msg,
             write_control_string ("message", txt_msg);
           if (err_msg)
             write_control_string ("error", err_msg);
-          write_control_bool ("echo", msg[i]->msg_style == PAM_PROMPT_ECHO_OFF ? 0 : 1);
+          write_control_bool ("echo", msg[i]->msg_style != PAM_PROMPT_ECHO_OFF);
           write_control_end ();
 
           if (err_msg)
@@ -291,6 +292,8 @@ perform_basic (const char *authorization)
   res = pam_authenticate (pamh, 0);
   if (res == PAM_SUCCESS)
     res = open_session (pamh);
+  else
+    btmp_log (user, "");
 
   free (user);
   if (password)
@@ -492,7 +495,10 @@ perform_gssapi (const char *authorization)
 
   res = open_session (pamh);
   if (res != PAM_SUCCESS)
-    goto out;
+    {
+      btmp_log (str, "");
+      goto out;
+    }
 
   /* The creds are used and cleaned up later */
   creds = client;
@@ -605,8 +611,14 @@ session (char **env)
   /* connect our and cockpit-bridge's stdout via fd 3, to avoid stdout output
    * from ~/.profile and friends to interfere with the protocol; route shell's
    * stdout to its stderr, so that we can still see it in the logs */
-  if (dup2 (1, 3) < 0 || dup2 (2, 1) < 0)
-    err (1, "could not redirect user shell stdout");
+  int remap_fds[5] = { -1, 2, -1, 1 };
+  int n_remap_fds = 4;
+
+  /* This is the "COCKPIT_LOGIN_MESSAGES_MEMFD" blob (ie: fd 4) */
+  if (login_messages)
+    remap_fds[n_remap_fds++] = fileno (login_messages);
+
+  fd_remap (remap_fds, n_remap_fds);
 
   if (env)
     execvpe (argv[0], argv, env);
@@ -697,6 +709,14 @@ main (int argc,
   for (i = 0; env_saved[i] != NULL; i++)
     pam_putenv (pamh, env_saved[i]);
 
+  if (want_session) /* no session → no login messages → no memfd */
+    {
+      if (pam_putenv (pamh, "COCKPIT_LOGIN_MESSAGES_MEMFD=4") != PAM_SUCCESS)
+        errx (EX, "Failed to set COCKPIT_LOGIN_MESSAGES_MEMFD=4 in PAM environment");
+
+      login_messages = open_memfd ("cockpit login messages");
+    }
+
   env = pam_getenvlist (pamh);
   if (env == NULL)
     errx (EX, "get pam environment failed");
@@ -712,15 +732,22 @@ main (int argc,
       signal (SIGINT, pass_to_child);
       signal (SIGQUIT, pass_to_child);
 
-      utmp_log (1, rhost);
+      fprintf (login_messages, "{\"version\": 1");
+
+      utmp_log (1, rhost, login_messages);
+
+      fprintf (login_messages, "}");
+      seal_memfd (login_messages);
 
       status = fork_session (env, session);
 
-      utmp_log (0, rhost);
+      utmp_log (0, rhost, NULL);
 
       signal (SIGTERM, SIG_DFL);
       signal (SIGINT, SIG_DFL);
       signal (SIGQUIT, SIG_DFL);
+
+      fclose (login_messages);
 
       res = pam_setcred (pamh, PAM_DELETE_CRED);
       if (res != PAM_SUCCESS)

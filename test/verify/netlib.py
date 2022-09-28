@@ -29,22 +29,25 @@ class NetworkHelpers:
 
         This is safe for @nondestructive tests, the interface gets cleaned up automatically.
         '''
-        self.machine.execute(r"""
-            mkdir -p /run/udev/rules.d/ &&
-            echo 'ENV{ID_NET_DRIVER}=="veth", ENV{INTERFACE}=="%(name)s", ENV{NM_UNMANAGED}="0"' > /run/udev/rules.d/99-nm-veth-%(name)s-test.rules &&
-            udevadm control --reload &&
+        self.machine.execute(r"""set -e
+            mkdir -p /run/udev/rules.d/
+            echo 'ENV{ID_NET_DRIVER}=="veth", ENV{INTERFACE}=="%(name)s", ENV{NM_UNMANAGED}="0"' > /run/udev/rules.d/99-nm-veth-%(name)s-test.rules
+            udevadm control --reload
             ip link add name %(name)s type veth peer name v_%(name)s
+            # Trigger udev to make sure that it has been renamed to its final name
+            udevadm trigger --subsystem-match=net
+            udevadm settle
             """ % {"name": name})
         self.addCleanup(self.machine.execute, "rm /run/udev/rules.d/99-nm-veth-{0}-test.rules; ip link del dev {0}".format(name))
         if dhcp_cidr:
-            # up the router end, give it an IP, and start DHCP server
+            # up the remote end, give it an IP, and start DHCP server
             self.machine.execute("ip a add {0} dev v_{1} && ip link set v_{1} up".format(dhcp_cidr, name))
             server = self.machine.spawn("dnsmasq --keep-in-foreground --log-queries --log-facility=- "
                                         "--conf-file=/dev/null --dhcp-leasefile=/tmp/leases.{0} "
-                                        "--bind-interfaces --interface=v_{0} --dhcp-range={1},{2},4h".format(name, dhcp_range[0], dhcp_range[1]),
-                                        "dhcp.log")
+                                        "--bind-interfaces --except-interface=lo --interface=v_{0} --dhcp-range={1},{2},4h".format(name, dhcp_range[0], dhcp_range[1]),
+                                        "dhcp-%s.log" % name)
             self.addCleanup(self.machine.execute, "kill %i" % server)
-            self.machine.execute("if firewall-cmd --state >/dev/null 3>&1; then firewall-cmd --add-service=dhcp; fi")
+            self.machine.execute("if firewall-cmd --state >/dev/null 2>&1; then firewall-cmd --add-service=dhcp; fi")
 
     def nm_activate_eth(self, iface):
         '''Create an NM connection for a given interface'''
@@ -55,12 +58,33 @@ class NetworkHelpers:
         m.execute("nmcli con up %s ifname %s" % (iface, iface))
         self.addCleanup(m.execute, "nmcli con delete %s" % iface)
 
+    def nm_checkpoints_disable(self):
+        self.browser.eval_js("window.cockpit_tests_disable_checkpoints = true;")
+
+    def nm_checkpoints_enable(self, settle_time=3.0):
+        self.browser.eval_js("window.cockpit_tests_disable_checkpoints = false;")
+        self.browser.eval_js("window.cockpit_tests_checkpoint_settle_time = %s;" % settle_time)
+
 
 class NetworkCase(MachineCase, NetworkHelpers):
     def setUp(self):
         super().setUp()
 
         m = self.machine
+
+        # clean up after nondestructive tests
+        if self.is_nondestructive():
+            def devs():
+                return set(self.machine.execute("ls /sys/class/net/ | grep -v bonding_masters").strip().split())
+
+            def cleanupDevs():
+                new = devs() - self.orig_devs
+                self.machine.execute("for d in %s; do ip link del dev $d; done" % ' '.join(new))
+
+            self.orig_devs = devs()
+            self.addCleanup(cleanupDevs)
+            self.restore_dir("/etc/NetworkManager", post_restore_action="systemctl try-restart NetworkManager")
+            self.restore_dir("/etc/sysconfig/network-scripts")
 
         # Ensure a clean and consistent state.  We remove rogue
         # connections that might still be here from the time of
@@ -124,8 +148,7 @@ class NetworkCase(MachineCase, NetworkHelpers):
             self.browser.wait_in_text(sel, text)
         except Error as e:
             print("Interface %s didn't show up." % iface)
-            print(self.browser.eval_js("ph_find('#networking-interfaces').outerHTML"))
-            print(self.machine.execute("grep . /sys/class/net/*/address"))
+            print(self.machine.execute("grep . /sys/class/net/*/address; nmcli con; nmcli dev; nmcli dev show %s || true" % iface))
             raise e
 
     def iface_con_id(self, iface):
@@ -141,14 +164,22 @@ class NetworkCase(MachineCase, NetworkHelpers):
         m.execute("systemctl restart NetworkManager")
 
     def slow_down_dhclient(self, delay):
-        m = self.machine
-        m.needs_writable_usr()
-        m.execute("mv /usr/sbin/dhclient /usr/sbin/dhclient.real")
-        m.write("/usr/sbin/dhclient", '#! /bin/sh\nsleep %s\nexec /usr/sbin/dhclient.real "$@"' % delay)
-        m.execute("chmod a+x /usr/sbin/dhclient")
+        self.machine.execute("""set -e
+        mkdir -p {0}
+        cp -a /usr/sbin/dhclient {0}/dhclient.real
+        printf '#!/bin/sh\\nsleep {1}\\nexec {0}/dhclient.real "$@"' > {0}/dhclient
+        chmod a+x {0}/dhclient
+        if selinuxenabled 2>&1; then chcon --reference /usr/sbin/dhclient {0}/dhclient; fi
+        mount -o bind {0}/dhclient /usr/sbin/dhclient
+        """.format(self.vm_tmpdir, delay))
+        self.addCleanup(self.machine.execute, "umount /usr/sbin/dhclient")
 
     def wait_onoff(self, sel, val):
         self.browser.wait_present(sel + " input" + (":checked" if val else ":not(:checked)"))
 
     def toggle_onoff(self, sel):
         self.browser.click(sel + " input")
+
+    def login_and_go(self, *args, **kwargs):
+        super().login_and_go(*args, **kwargs)
+        self.nm_checkpoints_disable()

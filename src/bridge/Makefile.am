@@ -44,6 +44,7 @@ libcockpit_bridge_a_SOURCES = \
 	src/bridge/cockpitdbusrules.h \
 	src/bridge/cockpitdbussetup.c \
 	src/bridge/cockpitdbususer.c \
+	src/bridge/cockpitdbusloginmessages.c \
 	src/bridge/cockpitechochannel.c \
 	src/bridge/cockpitechochannel.h \
 	src/bridge/cockpitfslist.c \
@@ -70,8 +71,6 @@ libcockpit_bridge_a_SOURCES = \
 	src/bridge/cockpitpeer.h \
 	src/bridge/cockpitpipechannel.c \
 	src/bridge/cockpitpipechannel.h \
-	src/bridge/cockpitpolkitagent.c \
-	src/bridge/cockpitpolkitagent.h \
 	src/bridge/cockpitrouter.c \
 	src/bridge/cockpitrouter.h \
 	src/bridge/cockpitstream.c \
@@ -80,6 +79,13 @@ libcockpit_bridge_a_SOURCES = \
 	src/bridge/cockpitwebsocketstream.h \
 	$(libcockpit_bridge_METRICS) \
 	$(NULL)
+
+if WITH_POLKIT
+libcockpit_bridge_a_SOURCES += \
+	src/bridge/cockpitpolkitagent.c \
+	src/bridge/cockpitpolkitagent.h \
+	$(NULL)
+endif
 
 libcockpit_bridge_a_CFLAGS = \
 	-I$(srcdir)/src/bridge \
@@ -285,6 +291,8 @@ libcockpit_pcp_a_SOURCES = \
 	src/bridge/cockpitconnect.h \
 	src/bridge/cockpitpcpmetrics.c \
 	src/bridge/cockpitpcpmetrics.h \
+	src/bridge/cockpitdbusinternal.c \
+	src/bridge/cockpitdbusinternal.h \
 	src/bridge/cockpitpeer.c \
 	src/bridge/cockpitpeer.h \
 	src/bridge/cockpitrouter.c \

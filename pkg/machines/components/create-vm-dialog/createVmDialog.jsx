@@ -19,8 +19,8 @@
 
 import React from 'react';
 import PropTypes from 'prop-types';
-import { FormGroup, HelpBlock, Modal, OverlayTrigger, Tooltip, TypeAheadSelect } from 'patternfly-react';
-import { Button } from '@patternfly/react-core';
+import { FormGroup, HelpBlock, Modal, TypeAheadSelect } from 'patternfly-react';
+import { Button, Tooltip, TooltipPosition } from '@patternfly/react-core';
 
 import cockpit from 'cockpit';
 import { MachinesConnectionSelector } from '../machinesConnectionSelector.jsx';
@@ -84,7 +84,7 @@ function getPoolSpaceAvailable({ storagePools, poolName, poolPath, connectionNam
     if (poolName)
         storagePool = storagePools.find(pool => pool.name === poolName);
     else if (poolPath)
-        storagePool = storagePools.find(pool => pool.target.path === poolPath);
+        storagePool = storagePools.find(pool => pool.target && pool.target.path === poolPath);
 
     return storagePool ? storagePool.available : undefined;
 }
@@ -404,9 +404,9 @@ const UnattendedRow = ({ validationFailed, unattendedDisabled, unattendedInstall
     );
     if (unattendedDisabled) {
         unattendedInstallationCheckbox = (
-            <OverlayTrigger overlay={ <Tooltip id='os-unattended-installation-tooltip'>{ _("The selected Operating System does not support unattended installation") }</Tooltip> } placement='left'>
+            <Tooltip id='os-unattended-installation-tooltip' content={_("The selected Operating System does not support unattended installation")} position={TooltipPosition.left}>
                 {unattendedInstallationCheckbox}
-            </OverlayTrigger>
+            </Tooltip>
         );
     }
 
@@ -825,9 +825,11 @@ class CreateVmModal extends React.Component {
         );
         if (this.state.unattendedInstallation) {
             startVmCheckbox = (
-                <OverlayTrigger overlay={ <Tooltip id='virt-install-not-available-tooltip'>{ _("Setting the user passwords for unattended installation requires starting the VM when creating it") }</Tooltip> } placement='left'>
+                <Tooltip id='virt-install-not-available-tooltip'
+                         position={TooltipPosition.left}
+                         content={_("Setting the user passwords for unattended installation requires starting the VM when creating it")}>
                     {startVmCheckbox}
-                </OverlayTrigger>
+                </Tooltip>
             );
         }
 
@@ -938,15 +940,15 @@ class CreateVmModal extends React.Component {
                     {dialogBody}
                 </Modal.Body>
                 <Modal.Footer>
-                    {this.state.inProgress && <div className="spinner spinner-sm pull-left" />}
-                    <Button variant='secondary' className='btn-cancel' onClick={ this.props.close }>
-                        {_("Cancel")}
-                    </Button>
                     <Button variant="primary"
                             isDisabled={Object.getOwnPropertyNames(validationFailed).length > 0}
                             onClick={this.onCreateClicked}>
                         {this.props.mode == 'create' ? _("Create") : _("Import")}
                     </Button>
+                    <Button variant='link' className='btn-cancel' onClick={ this.props.close }>
+                        {_("Cancel")}
+                    </Button>
+                    {this.state.inProgress && <div className="spinner spinner-sm pull-right" />}
                 </Modal.Footer>
             </Modal>
         );
@@ -1003,31 +1005,25 @@ export class CreateVmAction extends React.Component {
             testdata = "disabledOsInfo";
         else if (!this.state.virtInstallAvailable)
             testdata = "disabledVirtInstall";
-        else if (this.state.downloadOSSupported === undefined)
-            testdata = "disabledDownloadOS";
+        else if (this.state.downloadOSSupported === undefined || this.state.unattendedSupported === undefined)
+            testdata = "disabledCheckingFeatures";
         let createButton = (
-            <Button isDisabled={!(this.props.systemInfo.osInfoList &&
-                               (this.state.virtInstallAvailable !== undefined ||
-                                   (this.state.virtInstallAvailable &&
-                                       (this.state.downloadOSSupported === undefined || this.state.unattendedSupported === undefined))))}
+            <Button isDisabled={testdata !== undefined}
                     testdata={testdata}
                     id={this.props.mode == 'create' ? 'create-new-vm' : 'import-vm-disk'}
                     variant='secondary'
-                    style={!this.state.virtInstallAvailable ? { pointerEvents: 'none' } : null} // Fixes OverlayTrigger not showing up
                     onClick={this.open}>
                 {this.props.mode == 'create' ? _("Create VM") : _("Import VM")}
             </Button>
         );
         if (!this.state.virtInstallAvailable)
             createButton = (
-                <OverlayTrigger overlay={
-                    <Tooltip id='virt-install-not-available-tooltip'>
-                        {_("virt-install package needs to be installed on the system in order to create new VMs")}
-                    </Tooltip>} placement='top'>
+                <Tooltip id='virt-install-not-available-tooltip'
+                         content={_("virt-install package needs to be installed on the system in order to create new VMs")}>
                     <span>
                         {createButton}
                     </span>
-                </OverlayTrigger>
+                </Tooltip>
             );
 
         return (

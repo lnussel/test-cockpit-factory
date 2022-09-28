@@ -162,7 +162,7 @@ class TestApps(PackageCase):
 
         def set_lang(lang):
             b.switch_to_top()
-            b.click("#content-user-name")
+            b.click("#navbar-dropdown")
             b.click(".display-language-menu a")
             b.wait_popup('display-language')
             b.set_val("#display-language select", lang)
@@ -180,6 +180,9 @@ class TestApps(PackageCase):
         set_lang("ja-ja")
         b.wait_present(".app-description:contains('DESCRIPTION:none')")
         b.wait_not_present(".app-description:contains('DESCRIPTION:de')")
+
+        # like in the general whitelist, but translated
+        self.allow_journal_messages("xargs: basename: .*Signal 13.*")
 
     def testBrokenXML(self):
         b = self.browser

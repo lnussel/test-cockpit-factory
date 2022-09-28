@@ -73,22 +73,14 @@ const ConsoleSelector = ({ onChange, selected, isSerialConsole, vm }) => {
     }
 
     return (
-        <table className='form-table-ct'>
-            <tbody>
-                <tr>
-                    <td className='top'>
-                        <label>{_("Console Type")}</label>
-                    </td>
-                    <td>
-                        <Select.StatelessSelect id="console-type-select"
-                                                selected={selected}
-                                                onChange={onChange}>
-                            {entries}
-                        </Select.StatelessSelect>
-                    </td>
-                </tr>
-            </tbody>
-        </table>
+        <>
+            <label htmlFor="console-type-select">{_("Console Type")}</label>
+            <Select.StatelessSelect id="console-type-select"
+                                    selected={selected}
+                                    onChange={onChange}>
+                {entries}
+            </Select.StatelessSelect>
+        </>
     );
 };
 
@@ -161,7 +153,7 @@ class Consoles extends React.Component {
     }
 
     render () {
-        const { vm, config } = this.props;
+        const { vm, config, onAddErrorNotification } = this.props;
 
         if (!LibvirtDBus.canConsole || !LibvirtDBus.canConsole(vm.state)) {
             return (<VmNotRunning />);
@@ -184,9 +176,11 @@ class Consoles extends React.Component {
 
         switch (this.state.consoleType) {
         case 'serial-browser':
-            return <SerialConsole connectionName={vm.connectionName} vmName={vm.name} spawnArgs={serialConsoleCommand}>{consoleSelector}</SerialConsole>;
+            if (serialConsoleCommand)
+                return <SerialConsole connectionName={vm.connectionName} vmName={vm.name} spawnArgs={serialConsoleCommand}>{consoleSelector}</SerialConsole>;
+            break;
         case 'vnc-browser':
-            return <Vnc vm={vm} consoleDetail={this.state.consoleDetail}>{consoleSelector}</Vnc>;
+            return <Vnc vm={vm} consoleDetail={this.state.consoleDetail} onAddErrorNotification={onAddErrorNotification}>{consoleSelector}</Vnc>;
         case 'desktop':
             return <DesktopConsole vm={vm} onDesktopConsole={onDesktopConsole} config={config}>{consoleSelector}</DesktopConsole>;
         default:
@@ -200,6 +194,7 @@ Consoles.propTypes = {
     vm: PropTypes.object.isRequired,
     config: PropTypes.object.isRequired,
     dispatch: PropTypes.func.isRequired,
+    onAddErrorNotification: PropTypes.func.isRequired,
 };
 
 export default Consoles;

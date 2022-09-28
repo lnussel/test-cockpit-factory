@@ -22,15 +22,12 @@ try {
 }
 
 var ops = stdio.getopt({
-    deps: { key: "d", args: 1, description: "Output dependencies in Makefile format" }
+    config: { key: "c", args: 1, description: "Path to webpack.config.js", default: "webpack.config.js" },
+    deps: { key: "d", args: 1, description: "Output dependencies in Makefile format" },
+    watch: { key: "w", args: 0, description: "Enable webpack watch mode" },
 });
 
-if (!ops.args || ops.args.length < 1 || ops.args.length > 2) {
-    console.log("usage: webpack-make config [section]");
-    process.exit(2);
-}
-
-var srcdir = process.env.SRCDIR;
+var srcdir = process.env.SRCDIR || ".";
 var makefile = ops.deps;
 var prefix = "packages";
 var npm = { "dependencies": { } };
@@ -42,13 +39,25 @@ if (makefile) {
 }
 
 var cwd = process.cwd();
-var config_path = path.resolve(cwd, ops.args[0]);
+var config_path = path.resolve(cwd, ops.config);
 var config = require(config_path);
 
 // The latest input file time updated and used below
 var latest = fs.statSync(config_path).mtime;
 
-webpack(config, function(err, stats) {
+compiler = webpack(config);
+
+if (ops.watch) {
+    compiler.hooks.watchRun.tap("WebpackInfo", compilation => {
+        const time = new Date().toTimeString().split(' ')[0];
+        process.stdout.write(`${ time  } Build started\n`);
+    });
+    compiler.watch({}, process_result);
+} else {
+    compiler.run(process_result);
+}
+
+function process_result(err, stats) {
     // process.stdout.write(stats.toString({colors: true}) + "\n");
 
     if (err) {
@@ -57,16 +66,35 @@ webpack(config, function(err, stats) {
         return;
     }
 
+    if (ops.watch) {
+        const info = stats.toJson();
+        const time = new Date().toTimeString().split(' ')[0];
+        process.stdout.write(`${ time  } Build succeeded, took ${ info.time/1000 }s\n`);
+    }
+
     // Failure exit code when compilation fails
     if (stats.hasErrors() || stats.hasWarnings()) {
         console.log(stats.toString("normal"));
-        process.exit(1);
+        if (!ops.watch)
+            process.exit(1);
         return;
     }
 
-    if (makefile)
-        generateDeps(makefile, stats);
-});
+    if (makefile) {
+        if (!ops.watch)
+            generateDeps(makefile, stats);
+        else {
+            // Force "make" to re-create everything.  The results of
+            // incremental building are not good enough for building
+            // RPMs, for example.
+            var stamp = makefile.split("/").slice(0, -1).concat(["stamp"]).join("/");
+            if (fs.existsSync(makefile))
+                fs.unlinkSync(makefile);
+            if (fs.existsSync(stamp))
+                fs.unlinkSync(stamp);
+        }
+    }
+}
 
 function generateDeps(makefile, stats) {
 
@@ -186,8 +214,9 @@ function generateDeps(makefile, stats) {
     makeArray(prefix + "_TESTS", tests);
 
     var filters = po_locations.map(function (l) { return "-N " + l; });
+    filters.push("-N src/base1/cockpit.js"); // FIXME: See #13906
     if (prefix === "shell")
-        filters.push("$(addprefix -N ,$(shell find pkg/ -name manifest.json))");
+        filters.push("$(addprefix -N ,$(shell find pkg/ -name manifest.json.in))");
 
     lines.push(path.join(pkgdir, "%.po") + ": po/%.po");
     lines.push("\t$(AM_V_GEN) $(MKDIR_P) $(dir $@) && \\");

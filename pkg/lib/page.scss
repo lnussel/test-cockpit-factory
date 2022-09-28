@@ -1,5 +1,13 @@
+@import "patternfly-4-overrides.scss";
+
 a {
     cursor: pointer;
+}
+
+p + p {
+    // The mix of PF3 and PF4 removes margin from paragraphs.
+    // We want successive paragraphs to have spaces between each other.
+    margin-top: var(--pf-global--spacer--md);
 }
 
 .disabled {
@@ -109,33 +117,6 @@ a.disabled:hover {
 .blank-slate-pf .spinner-lg {
     height: 58px;
     width: 58px;
-}
-
-/*
- * Control buttons such as play and stop
- * Used with .pf-c-button .pf-m-secondary
- */
-
-.btn-control-ct,
-.btn-control-ct:hover {
-    background-position: center center;
-    background-size: 16px 16px;
-    background-repeat: no-repeat;
-    background-image: none;
-    -webkit-border-radius: 2;
-    @moz-border-radius: 2;
-    border-radius: 2px;
-    height: 28px;
-    width: 28px;
-    box-shadow: none;
-}
-
-.btn-control-ct {
-    background-color: var(--color-gray-2);
-}
-
-.btn-control-ct:hover {
-   background-color: #e0e0e0;
 }
 
 .link-button {
@@ -526,28 +507,6 @@ input[type=number] {
 }
 
 [hidden] { display: none !important; }
-
-/*** PF4 overrides (when a mix of PF3 + PF4 is used at the same time) ***/
-
-/* WORKAROUND: Override word-break bug */
-/* See: https://github.com/patternfly/patternfly-next/issues/2325 */
-.pf-c-table td {
-    word-break: normal;
-    overflow-wrap: break-word;
-}
-
-/* Fix alignment for icons inside of dropdown toggle (& split) buttons */
-/* Part 1 of 2 */
-.pf-c-dropdown__toggle {
-  align-items: stretch;
-  /* PF4 uses align-items: center here; stretch (the default) is what we need. */
-}
-
-/* Align the icons inside of the toggle. Part 2 of 2 */
-.pf-c-dropdown__toggle-button {
-  display: flex;
-  align-items: center;
-}
 
 /* btn-lg, btn-sm don't exist in PF4 */
 .pf-c-button.btn-lg {

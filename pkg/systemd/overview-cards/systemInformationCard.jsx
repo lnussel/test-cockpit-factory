@@ -18,6 +18,7 @@
  */
 import React from 'react';
 import { Card, CardHeader, CardBody, CardFooter } from '@patternfly/react-core';
+import moment from 'moment';
 
 import cockpit from "cockpit";
 import * as machine_info from "machine-info.js";
@@ -33,11 +34,19 @@ export class SystemInfomationCard extends React.Component {
         this.state = {};
         this.getDMIInfo = this.getDMIInfo.bind(this);
         this.getMachineId = this.getMachineId.bind(this);
+        this.getSystemUptime = this.getSystemUptime.bind(this);
     }
 
     componentDidMount() {
         this.getDMIInfo();
         this.getMachineId();
+        this.getSystemUptime();
+
+        this.uptimeTimer = setInterval(this.getSystemUptime, 60000);
+    }
+
+    componentWillUnmount() {
+        clearInterval(this.uptimeTimer);
     }
 
     getMachineId() {
@@ -81,6 +90,15 @@ export class SystemInfomationCard extends React.Component {
                 });
     }
 
+    getSystemUptime() {
+        cockpit.file("/proc/uptime").read()
+                .then(content => {
+                    const uptime = parseFloat(content.split(' ')[0]);
+                    this.setState({ systemUptime: moment.duration(uptime * 1000).humanize() });
+                })
+                .fail(ex => console.error("Error reading system uptime", ex));
+    }
+
     render() {
         return (
             <Card className="system-information">
@@ -106,11 +124,17 @@ export class SystemInfomationCard extends React.Component {
                                     <div id="system_machine_id">{this.state.machineID}</div>
                                 </td>
                             </tr>
+                            <tr>
+                                <th scope="row" className="system-information-uptime">{_("Uptime")}</th>
+                                <td>
+                                    <div id="system_uptime">{this.state.systemUptime}</div>
+                                </td>
+                            </tr>
                         </tbody>
                     </table>
                 </CardBody>
                 <CardFooter>
-                    <a role="link" tabIndex="0" className="no-left-padding" onClick={() => cockpit.jump("/system/hwinfo", cockpit.transport.host)}>
+                    <a href="#" className="no-left-padding" onClick={ev => { ev.preventDefault(); cockpit.jump("/system/hwinfo", cockpit.transport.host) }}>
                         {_("View hardware details")}
                     </a>
                 </CardFooter>

@@ -20,23 +20,18 @@
     width: 200px;
 }
 
-.machines-disks .listing-ct th:nth-last-child(-n+2),
-.machines-disks .listing-ct td:nth-last-child(-n+2) :not(.machines-listing-actions) {
-    text-align: left;
-}
-
 .machines-disks-source {
-    /* Counter-act parent td padding for the table */
-    margin: -5px 0;
-
-    th, td {
-        padding: 0;
-        vertical-align: baseline;
+    &-label {
+        border-radius: var(--pf-global--BorderRadius--sm);
+        padding: var(--pf-global--spacer--xs) var(--pf-global--spacer--sm);
+        margin-right: var(--pf-global--spacer--sm);
+        background: var(--pf-global--BackgroundColor--300);
+        color: var(--pf-global--Color--300);
     }
 
-    th + td,
-    td + td {
-        padding-left: 0.5em;
+    &-label,
+    &-value {
+        font-size: var(--pf-global--FontSize--sm);
     }
 }
 
@@ -73,6 +68,11 @@
 
 .blue {
     color: var(--color-link);
+}
+
+.machines-desktop {
+    display: flex;
+    flex-wrap: wrap;
 }
 
 .machines-desktop-main {
@@ -155,26 +155,23 @@
 }
 
 .machines-listing-actions {
-    display: inline-flex;
-    justify-content: space-between;
+    display: flex;
+    justify-content: end;
+    flex-flow: wrap;
+    margin: -0.25rem 0;
 }
 
-.machines-listing-actions > *:not(:last-child) {
-    margin-right: 0.5rem;
+.machines-listing-actions > button {
+    margin: 0.25rem 0 0.25rem 0.5rem;
 }
 
 .machines-network-list {
     max-height: 500px;
-    overflow: auto;
     padding-bottom: 15px;
 }
 
 .panel-heading .btn {
     margin-left: 3px;
-}
-
-.console-menu {
-    padding-bottom: 1em;
 }
 
 .console-actions-buttons {
@@ -193,19 +190,6 @@
 
 #create-vm-dialog .spinner {
     display: inline-block;
-}
-
-.modal-body + .modal-footer {
-    /* Remove unneeded margin when there's a modal body and footer */
-    margin-top: 0;
-}
-
-/* Machines Modal footer custom CSS */
-.modal-footer .idle-message {
-    align-items: center;
-    display: flex;
-    float: left;
-    line-height: 24px; /* Same height as a button */
 }
 
 #vcpus-tooltip.pficon-pending, #boot-order-tooltip.pficon-pending,
@@ -238,7 +222,8 @@ td > .utilization-bar-pf {
     }
 }
 
-.error.listing-ct-item {
+.error.listing-ct-item,
+table.listing-ct-table > tbody > tr:first-child.error {
     background-color: var(--color-ct-list-critical-bg) !important;  /* keep red background when expanded */
 }
 
@@ -384,6 +369,10 @@ $toast-anim-speed: 200ms;
     }
 }
 
+#virtual-machines-listing .listing-ct-body {
+    overflow: visible;
+}
+
 @keyframes toast-fade-in {
     0% {
         opacity: 0;
@@ -401,8 +390,22 @@ $toast-anim-speed: 200ms;
     padding: .5rem
 }
 
-// Add spacing around buttons in the VM overview
-.listing-ct-actions .pf-c-button {
-    margin-left: 0.3em;
-    margin-right: 0.3em;
+.pf-c-dropdown__menu-item.pf-m-danger {
+    color: var(--pf-global--danger-color--200);
+}
+
+.pf-c-table {
+    .pf-c-table__toggle {
+        padding-left: 0;
+    }
+
+    .btn-group {
+        align-items: center;
+    }
+
+    > tbody > tr:not(.pf-c-table__expandable-row) > [data-label=Actions] .pf-c-button {
+        // vertical: compensate for padding; fixing alignment
+        // horizontal: add some needed padding
+        margin:  -0.25rem 0.25rem;
+    }
 }

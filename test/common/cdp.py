@@ -176,12 +176,14 @@ class CDP:
                     "--disable-sandbox-denial-logging", "--disable-pushstate-throttle",
                     "--window-size=1920x1200", "--remote-debugging-port=%i" % cdp_port, "about:blank"]
         elif self.browser == "firefox":
-            subprocess.Popen(["firefox", "--headless", "--no-remote", "-CreateProfile", "blank"], env=env).communicate()
+            subprocess.Popen([exe, "--headless", "--no-remote", "-CreateProfile", "blank"], env=env).communicate()
             profile = glob.glob(os.path.join(self._browser_home, ".mozilla/firefox/*.blank"))[0]
 
             with open(os.path.join(profile, "user.js"), "w") as f:
                 f.write("""
                     user_pref("remote.enabled", true);
+                    user_pref("remote.frames.enabled", true);
+                    user_pref("app.update.auto", false);
                     user_pref("datareporting.policy.dataSubmissionEnabled", false);
                     user_pref("toolkit.telemetry.reportingpolicy.firstRun", false);
                     user_pref("dom.disable_beforeunload", true);

@@ -26,7 +26,7 @@ import {
     ListViewItem,
     Modal
 } from 'patternfly-react';
-import { Button } from '@patternfly/react-core';
+import { Button, Alert } from '@patternfly/react-core';
 
 import { ModalError } from 'cockpit-components-inline-notification.jsx';
 import {
@@ -274,15 +274,10 @@ export class BootOrderModal extends React.Component {
             return false;
         }
 
-        const showFooterWarning = () => {
+        const showWarning = () => {
             if (vm.state === "running" &&
                 this.state.devices.some((device, index) => deviceStateHasChanged(device, index))) {
-                return (
-                    <div className="idle-message">
-                        <i className='pficon pficon-pending' />
-                        <span id={`${idPrefix}-min-message`}>{_("Changes will take effect after shutting down the VM")}</span>
-                    </div>
-                );
+                return <Alert isInline variant='warning' id={`${idPrefix}-min-message`} title={_("Changes will take effect after shutting down the VM")} />;
             }
         };
 
@@ -318,16 +313,16 @@ export class BootOrderModal extends React.Component {
                     <Modal.Title> {`${vm.name} ${title}`} </Modal.Title>
                 </Modal.Header>
                 <Modal.Body>
+                    {showWarning()}
                     {defaultBody}
                 </Modal.Body>
                 <Modal.Footer>
                     {this.state.dialogError && <ModalError dialogError={this.state.dialogError} dialogErrorDetail={this.state.dialogErrorDetail} />}
-                    {showFooterWarning()}
-                    <Button id={`${idPrefix}-cancel`} variant='secondary' onClick={this.close}>
-                        {_("Cancel")}
-                    </Button>
                     <Button id={`${idPrefix}-save`} variant='primary' onClick={this.save}>
                         {_("Save")}
+                    </Button>
+                    <Button id={`${idPrefix}-cancel`} variant='link' onClick={this.close}>
+                        {_("Cancel")}
                     </Button>
                 </Modal.Footer>
             </Modal>

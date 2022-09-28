@@ -38,9 +38,10 @@
   <refsect1 id="cockpit-conf-description">
     <title>DESCRIPTION</title>
   <para>
-    Cockpit can be configured via /etc/cockpit/cockpit.conf.  That file has a INI
-    file syntax and thus contains key / value pairs, grouped into topical groups. See the
-    examples below for details..
+    Cockpit can be configured via /etc/cockpit/cockpit.conf.  This file is not required
+    and may need to be created manually.  The file has a INI file syntax and thus
+    contains key / value pairs, grouped into topical groups. See the examples below for
+    details..
   </para>
 
   <para>Note: The port that cockpit listens on cannot be changed in this file. To change
@@ -217,10 +218,10 @@ ProtocolHeader = X-Forwarded-Proto
           <informalexample>
 <programlisting language="js">
 [Session]
-IdleTimeout=0
+IdleTimeout=15
 </programlisting>
-          </informalexample>		
-          <para>When not specified, the default is <literal>15</literal> minutes.</para>
+          </informalexample>
+          <para>When not specified, there is no idle timeout by default.</para>
         </listitem>
       </varlistentry>
     </variablelist>

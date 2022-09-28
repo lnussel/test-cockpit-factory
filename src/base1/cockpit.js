@@ -33,11 +33,22 @@ var mock = mock || { }; // eslint-disable-line no-use-before-define
 var cockpit = { };
 event_mixin(cockpit, { });
 
+/*
+ * The debugging property is a global that is used
+ * by various parts of the code to show/hide debug
+ * messages in the javascript console.
+ *
+ * We supprot using storage to get/set that property
+ * so that it carries across the various frames or
+ * alternatively persists across refreshes.
+ */
 if (typeof window.debugging === "undefined") {
     try {
         // Sometimes this throws a SecurityError such as during testing
-        window.debugging = window.sessionStorage.debugging ||
-                           window.localStorage.debugging;
+        Object.defineProperty(window, "debugging", {
+            get: function() { return window.sessionStorage.debugging || window.localStorage.debugging },
+            set: function(x) { window.sessionStorage.debugging = x }
+        });
     } catch (e) { }
 }
 
@@ -4328,6 +4339,16 @@ function factory() {
         var self = this;
         event_mixin(self, { });
 
+        var api = cockpit.dbus(null, { bus: "internal" }).proxy("cockpit.Superuser", "/superuser");
+        api.addEventListener("changed", maybe_reload);
+
+        function maybe_reload() {
+            if (api.valid && self.allowed !== null) {
+                if (self.allowed != (api.Current != "none"))
+                    window.location.reload(true);
+            }
+        }
+
         self.allowed = null;
         self.user = options ? options.user : null; // pre-fill for unit tests
         self.is_superuser = options ? options._is_superuser : null; // pre-fill for unit tests
@@ -4368,6 +4389,7 @@ function factory() {
                     var allowed = decide(user);
                     if (self.allowed !== allowed) {
                         self.allowed = allowed;
+                        maybe_reload();
                         self.dispatchEvent("changed");
                     }
                 });

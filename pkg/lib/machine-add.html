@@ -1,7 +1,7 @@
 <div class="modal-header">
     <button class="close" data-dismiss="modal"
         aria-hidden="true">&times;</button>
-    <h4 class="modal-title" translate="yes">Add Machine to Dashboard</h4>
+    <h4 class="modal-title" translate="yes">Add a New Host</h4>
 </div>
 
 <div class="modal-body">
@@ -12,7 +12,7 @@
                 <td>
                 <div class="dialog-wrapper error-keep">
                     <input class="form-control" id="add-machine-address"
-                       type="test" value="{{ full_address }}"
+                       type="text" value="{{ full_address }}"
                        list="options"
                        placeholder="{{ placeholder }}"/>
                     <datalist id="options">
@@ -33,12 +33,12 @@
 </div>
 
 <div class="modal-footer">
+    <button class="pf-c-button pf-m-primary" translate="yes">Add</button>
+    <button class="pf-c-button pf-m-link" data-dismiss="modal" translate="yes">Cancel</button>
     {{#nearlimit}}
     <div class="alert alert-warning dialog-error dashboard-machine-warning">
         <span class="pficon pficon-warning-triangle-o"></span>
         <span translate="yes">Connecting simultaneously to more than {{ limit }} machines is unsupported.</span>
     </div>
     {{/nearlimit}}
-    <button class="pf-c-button pf-m-secondary" data-dismiss="modal" translate="yes">Cancel</button>
-    <button class="pf-c-button pf-m-primary" translate="yes">Add</button>
 </div>

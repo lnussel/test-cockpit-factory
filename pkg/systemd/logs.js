@@ -17,16 +17,24 @@
  * along with Cockpit; If not, see <http://www.gnu.org/licenses/>.
  */
 
+import '../../src/base1/patternfly-cockpit.scss';
+
 import $ from "jquery";
 import cockpit from "cockpit";
 import { journal } from "journal";
 import moment from "moment";
 import { init_reporting } from "./reporting.jsx";
+import { superuser } from "superuser";
 
 import ReactDOM from 'react-dom';
 import React from 'react';
 import { EmptyStatePanel } from "cockpit-components-empty-state.jsx";
 import { ExclamationCircleIcon } from '@patternfly/react-icons';
+
+// We open a couple of long-running channels with { superuser: "try" },
+// so we need to reload the page if the access level changes.
+//
+superuser.reload_page_on_change();
 
 $(function() {
     cockpit.translate();
@@ -34,6 +42,7 @@ $(function() {
 
     var update_services_list = true;
     var current_services = new Set();
+    let the_journal = null;
 
     var problems_client = cockpit.dbus('org.freedesktop.problems', { superuser: "try" });
     var service = problems_client.proxy('org.freedesktop.Problems2', '/org/freedesktop/Problems2');
@@ -114,7 +123,7 @@ $(function() {
     }
 
     /* Not public API */
-    function journalbox(outer, start, match, day_box) {
+    function journalbox(outer, match, priority, tag, keep_following, grep, boot, since) {
         var box = $('<div class="panel panel-default cockpit-log-panel" role="table">');
         var start_box = $('<div class="journal-start" id="start-box" role="rowgroup">');
 
@@ -124,38 +133,38 @@ $(function() {
         var query_more = 1000;
 
         var renderer = journal.renderer(box);
-        /* cache to store offsets for days */
-        var renderitems_day_cache = null;
         var procs = [];
+        var following_procs = [];
 
         var loading_services = false;
 
+        let no_logs = true;
+
         function query_error(error) {
             /* TODO: blank slate */
-            console.warn(cockpit.message(error));
+            console.error(cockpit.message(error));
         }
 
         function prepend_entries(entries) {
+            if (entries.length > 0)
+                no_logs = false;
             for (var i = 0; i < entries.length; i++) {
                 renderer.prepend(entries[i]);
                 current_services.add(entries[i].SYSLOG_IDENTIFIER);
             }
             renderer.prepend_flush();
             show_service_filters();
-            /* empty cache for day offsets */
-            renderitems_day_cache = null;
         }
 
         function append_entries(entries) {
+            if (entries.length > 0)
+                no_logs = false;
             for (var i = 0; i < entries.length; i++)
                 renderer.append(entries[i]);
             renderer.append_flush();
-            /* empty cache for day offsets */
-            renderitems_day_cache = null;
         }
 
         function didnt_reach_start(first) {
-            const no_logs = document.querySelector("#journal-box .cockpit-log-panel").innerHTML === "";
             manage_start_box(false, no_logs,
                              no_logs ? _("No Logs Found") : "",
                              no_logs ? _("You may try to load older entries.") : "",
@@ -164,7 +173,7 @@ $(function() {
                                  var count = 0;
                                  var stopped = null;
                                  manage_start_box(true, false, no_logs ? ("Loading...") : null, "", "");
-                                 procs.push(journal.journalctl(match, { follow: false, reverse: true, cursor: first })
+                                 procs.push(journal.journalctl(match, { follow: false, reverse: true, cursor: first, priority: priority, grep: grep })
                                          .fail(query_error)
                                          .stream(function(entries) {
                                              if (entries[0].__CURSOR == first)
@@ -178,7 +187,7 @@ $(function() {
                                              }
                                          })
                                          .done(function() {
-                                             if (document.querySelector("#journal-box .cockpit-log-panel").innerHTML === "")
+                                             if (no_logs)
                                                  manage_start_box(false, true, _("No Logs Found"), _("Can not find any logs using the current combination of filters."));
                                              else if (count < query_more)
                                                  ReactDOM.unmountComponentAtNode(document.getElementById("start-box"));
@@ -187,60 +196,29 @@ $(function() {
         }
 
         function follow(cursor) {
-            procs.push(journal.journalctl(match, { follow: true, count: 0, cursor: cursor })
+            following_procs.push(journal.journalctl(match, { follow: true, count: 0, cursor: cursor || null, priority: priority, grep: grep })
                     .fail(query_error)
                     .stream(function(entries) {
                         if (entries[0].__CURSOR == cursor)
                             entries.shift();
-                        prepend_entries(entries);
-                        const sb_title = document.querySelector("#start-box .pf-c-title");
-                        if (sb_title && sb_title.innerHTML === "No Logs Found") {
+                        if (entries.length > 0 && no_logs)
                             ReactDOM.unmountComponentAtNode(document.getElementById("start-box"));
-                        }
-                        update_day_box();
+                        prepend_entries(entries);
                     }));
         }
-
-        function update_day_box() {
-            /* Build cache if empty
-             */
-            if (renderitems_day_cache === null) {
-                renderitems_day_cache = [];
-                for (var d = box[0].firstChild; d; d = d.nextSibling) {
-                    if ($(d).hasClass('panel-heading'))
-                        renderitems_day_cache.push([$(d).offset().top, $(d).text()]);
-                }
-            }
-            if (renderitems_day_cache.length > 0) {
-                /* Find the last day that begins above top
-                 */
-                var currentIndex = 0;
-                var top = window.scrollY;
-                while ((currentIndex + 1) < renderitems_day_cache.length &&
-                        renderitems_day_cache[currentIndex + 1][0] < top) {
-                    currentIndex++;
-                }
-                day_box.text(renderitems_day_cache[currentIndex][1]);
-            } else {
-                /* No visible day headers
-                 */
-                day_box.text(_("Go to"));
-            }
-        }
+        outer.follow = follow;
 
         function clear_service_list() {
             if (loading_services) {
-                $('#journal-services-list').empty()
-                        .append($('<li>').text(_("Loading...")));
+                $('#journal-service-menu').empty()
+                        .append($('<option selected disabled>').text(_("Loading...")));
                 return;
             }
 
-            $('#journal-services-list').empty()
-                    .append($('<li>').append($('<a>')
-                            .text(_("All"))
-                            .attr('data-service', "")))
-                    .append($('<li>')
-                            .addClass("divider"));
+            $('#journal-service-menu').empty()
+                    .append($('<option value="*">').text(_("All")))
+                    .append($('<option value="" role="separator" className="divider" disabled>').text("──────────"));
+            fit_filters();
         }
 
         function load_service_filters(match, options) {
@@ -272,46 +250,25 @@ $(function() {
             Array.from(current_services).sort((a, b) =>
                 a.toLowerCase().localeCompare(b.toLowerCase())
             )
-                    .forEach(function(unit) {
-                        $('#journal-services-list').append(
-                            $('<li>').append($('<a>')
-                                    .text(unit)
-                                    .attr('data-service', unit)));
-                    });
+                    .forEach(unit => $('#journal-service-menu').append($('<option value="' + unit + '"' + (unit === tag ? ' selected>' : '>')).text(unit)));
         }
 
         manage_start_box(true, false, _("Loading..."), "", "");
 
-        $('#journal-service-menu').on("click", "a", function() {
-            update_services_list = false;
-            cockpit.location.go([], $.extend(cockpit.location.options, { tag: $(this).attr('data-service') }));
-        });
-
-        $(window).on('scroll', update_day_box);
-
         var options = {
             follow: false,
-            reverse: true
+            reverse: true,
+            priority: priority,
+            grep: grep,
+            boot: boot,
+            since: since,
         };
 
-        var last = null;
+        let last = keep_following ? null : 1;
         var count = 0;
         var oldest = null;
         var stopped = false;
-
-        var all = false;
-        if (start == 'boot') {
-            options.boot = null;
-        } else if (start == 'previous-boot') {
-            options.boot = "-1";
-            last = 1; // Do not try to get newer logs
-        } else if (start == 'last-24h') {
-            options.since = "-1days";
-        } else if (start == 'last-week') {
-            options.since = "-7days";
-        } else {
-            all = true;
-        }
+        var all = boot === undefined && since === undefined;
 
         var tags_match = [];
         match.forEach(function (field) {
@@ -324,13 +281,20 @@ $(function() {
             load_service_filters(tags_match, options);
         }
 
+        // Show the journalctl query in inline help
+        const cmd = journal.build_cmd(match, options);
+        const filtered_cmd = cmd[0].filter(i => i !== "-q" && i !== "--output=json");
+        if (filtered_cmd[filtered_cmd.length - 1] == "--")
+            filtered_cmd.pop();
+
+        document.getElementById("journal-query").innerHTML = filtered_cmd.join(" ");
+
         procs.push(journal.journalctl(match, options)
                 .fail(query_error)
                 .stream(function(entries) {
                     if (!last) {
                         last = entries[0].__CURSOR;
                         follow(last);
-                        update_day_box();
                     }
                     count += entries.length;
                     append_entries(entries);
@@ -342,24 +306,23 @@ $(function() {
                     }
                 })
                 .done(function() {
-                    if (document.querySelector("#journal-box .cockpit-log-panel").innerHTML === "")
+                    if (no_logs)
                         manage_start_box(false, true, _("No Logs Found"), _("Can not find any logs using the current combination of filters."));
                     else if (count < query_count)
                         ReactDOM.unmountComponentAtNode(document.getElementById("start-box"));
                     if (!last) {
-                        procs.push(journal.journalctl(match, {
+                        following_procs.push(journal.journalctl(match, {
                             follow: true, count: 0,
                             boot: options.boot,
-                            since: options.since
+                            since: options.since,
+                            priority: priority,
+                            grep: grep,
                         })
                                 .fail(query_error)
                                 .stream(function(entries) {
-                                    prepend_entries(entries);
-                                    const sb_title = document.querySelector("#start-box .pf-c-title");
-                                    if (sb_title && sb_title.innerHTML === "No Logs Found") {
+                                    if (entries.length > 0 && no_logs)
                                         ReactDOM.unmountComponentAtNode(document.getElementById("start-box"));
-                                    }
-                                    update_day_box();
+                                    prepend_entries(entries);
                                 }));
                     }
                     if (!all || stopped)
@@ -367,8 +330,16 @@ $(function() {
                 }));
 
         outer.stop = function stop() {
-            $(window).off('scroll', update_day_box);
             $.each(procs, function(i, proc) {
+                proc.stop();
+            });
+            $.each(following_procs, function(i, proc) {
+                proc.stop();
+            });
+        };
+
+        outer.stop_following = function stop_following() {
+            $.each(following_procs, function(i, proc) {
                 proc.stop();
             });
         };
@@ -387,40 +358,71 @@ $(function() {
         stop_query();
 
         var match = [];
+        const options = cockpit.location.options;
 
-        var query_prio = cockpit.location.options.prio || "3";
-        var prio_level = parseInt(query_prio, 10);
+        const grep = options.grep || "";
+        let full_grep = "";
 
-        // Set selected item into priority dropdown menu
-        var all_prios = document.getElementById('prio-lists').childNodes;
-        var item;
-        for (var j = 0; j < all_prios.length; j++) {
-            if (all_prios[j].nodeName === 'LI') {
-                item = all_prios[j].childNodes[0];
-                if (item.getAttribute('data-prio') === query_prio) {
-                    $('#journal-prio').text(item.text);
-                    break;
-                }
-            }
+        const prio_level = options.prio || "err";
+        full_grep += "priority:" + prio_level + " ";
+
+        // Set selected item into priority select menu
+        const prio_options = [...document.getElementById('journal-prio-menu').children];
+        prio_options.forEach(p => {
+            if (p.getAttribute('value') === prio_level)
+                p.selected = true;
+            else
+                p.selected = false;
+        });
+
+        let follow = !(options.follow && options.follow === "false");
+
+        if (options.boot && options.boot !== "0") // Don't follow if specific boot is picked
+            follow = false;
+
+        const follow_button = document.getElementById("journal-follow");
+        if (follow) {
+            follow_button.textContent = _("Pause");
+            follow_button.setAttribute("data-following", true);
+        } else {
+            follow_button.textContent = _("Resume");
+            follow_button.setAttribute("data-following", false);
         }
 
-        if (!isNaN(prio_level)) {
-            for (var i = 0; i <= prio_level; i++)
-                match.push('PRIORITY=' + i.toString());
+        if (options.service) {
+            let s = options.service;
+            if (!s.endsWith(".service"))
+                s = s + ".service";
+            match.push(...['_SYSTEMD_UNIT=' + s, "+", "COREDUMP_UNIT=" + s, "+", "UNIT=" + s]);
+            full_grep += "service:" + options.service + " ";
         }
 
-        var options = cockpit.location.options;
-        if (options.service)
-            match.push('_SYSTEMD_UNIT=' + options.service);
-        else if (options.tag)
+        if (options.tag && options.tag !== "*") {
             match.push('SYSLOG_IDENTIFIER=' + options.tag);
-        $('#journal-service').text(options.tag || _("All"));
+            full_grep += "identifier:" + options.tag + " ";
+        }
 
-        var query_start = cockpit.location.options.start || "recent";
-        if (query_start == 'recent')
-            $(window).scrollTop($(document).height());
+        if (options.boot)
+            full_grep += "boot:" + options.boot + " ";
 
-        journalbox($("#journal-box"), query_start, match, $('#journal-current-day'));
+        if (options.since)
+            full_grep += "since:" + options.since + " ";
+
+        // Other filters may be passed as well
+        Object.keys(options).forEach(k => {
+            if (k === k.toUpperCase() && options[k]) {
+                options[k].split(",").forEach(v => match.push(k + "=" + v));
+                full_grep += k + '=' + options[k] + " ";
+            }
+        });
+
+        full_grep += grep;
+        document.getElementById("journal-grep").value = full_grep;
+
+        if (the_journal)
+            the_journal.stop();
+
+        the_journal = journalbox($("#journal-box"), match, prio_level, options.tag, follow, grep, options.boot, options.since);
     }
 
     function update_entry() {
@@ -915,14 +917,61 @@ $(function() {
         $("body").show();
     }
 
+    function check_grep() {
+        // Sometimes `journalctl` can be compiled without `PCRE2` which means
+        // that `--grep` is not usable. Hide the search box in such cases.
+        cockpit.spawn(["journalctl", "--version"])
+                .then(m => {
+                    if (m.indexOf("-PCRE2") !== -1) {
+                        document.querySelector(".text-search").hidden = true;
+                        fit_filters();
+                    }
+                });
+    }
+
+    function fit_filters() {
+        if ($(".filters-toggle button").is(":hidden")) {
+            $("#journal .content-header-extra").toggleClass("toggle-filters-closed");
+            $(".filters-toggle").prop("hidden", false);
+            $(".filters-toggle button").text(_("Show filters"));
+        } else {
+            $(".filters-toggle button").text(_("Hide filters"));
+        }
+    }
+
+    function parse_search(value) {
+        const new_items = {};
+        const values = value.split(" ")
+                .filter(item => {
+                    let s = item.split("=");
+                    if (s.length === 2 && s[0] === s[0].toUpperCase()) {
+                        new_items[s[0]] = s[1];
+                        return false;
+                    }
+
+                    const well_know_keys = ["since", "boot", "priority", "follow", "service", "identifier"];
+                    const map_keys = (key) => {
+                        if (key === "priority")
+                            return "prio";
+                        if (key === "identifier")
+                            return "tag";
+                        return key;
+                    };
+                    s = item.split(":");
+                    if (s.length === 2 && well_know_keys.includes(s[0])) {
+                        new_items[map_keys(s[0])] = s[1];
+                        return false;
+                    }
+
+                    return true;
+                });
+        new_items.grep = values.join(" ");
+        return new_items;
+    }
+
     $(cockpit).on("locationchanged", function() {
         update_services_list = true;
         update();
-    });
-
-    $('#journal-current-day-menu a').on('click', function() {
-        update_services_list = true;
-        cockpit.location.go([], $.extend(cockpit.location.options, { start: $(this).attr("data-op") }));
     });
 
     $('#journal-box').on('click', '.cockpit-logline', function() {
@@ -931,9 +980,87 @@ $(function() {
             cockpit.location.go([cursor], { parent_options: JSON.stringify(cockpit.location.options) });
     });
 
-    $('#journal-prio-menu a').on('click', function() {
+    $('#journal-box').on('keypress', '.cockpit-logline', function(ev) {
+        if (ev.key !== "Enter")
+            return;
+
+        var cursor = $(this).attr('data-cursor');
+        if (cursor)
+            cockpit.location.go([cursor], { parent_options: JSON.stringify(cockpit.location.options) });
+    });
+
+    $('#journal-cmd-copy').on('click', function(ev) {
+        ev.preventDefault();
+        ev.stopPropagation();
+        try {
+            navigator.clipboard.writeText(document.getElementById("journal-query").innerHTML)
+                    .then(() => {
+                        let icon = ev.target;
+                        if (ev.target.nodeName == "BUTTON")
+                            icon = ev.target.firstElementChild;
+                        icon.classList.remove("fa-clipboard");
+                        icon.classList.add("fa-check");
+                        icon.classList.add("green-icon");
+                        setTimeout(() => {
+                            icon.classList.remove("fa-check");
+                            icon.classList.remove("green-icon");
+                            icon.classList.add("fa-clipboard");
+                        }, 3000);
+                    })
+                    .catch(e => console.error('Text could not be copied: ', e ? e.toString() : ""));
+        } catch (error) {
+            console.error('Text could not be copied: ', error.toString());
+        }
+    });
+
+    function onFilter(e) {
+        console.log(e);
+        if (e.type == "keyup" && e.keyCode !== 13) // Only accept enter for entering
+            return;
+
+        const options = parse_search(document.getElementById("journal-grep").value);
         update_services_list = true;
-        cockpit.location.go([], $.extend(cockpit.location.options, { prio: $(this).attr('data-prio') }));
+        const key = $(this).attr("data-key");
+        const val = $(this).attr("data-value");
+
+        // Remove all parameters which can be set up using filters
+        delete options.boot;
+        delete options.since;
+
+        cockpit.location.go([], $.extend(options, { [key]: val }));
+    }
+
+    $('#logs-predefined-filters a').on('click', onFilter);
+    $('#logs-predefined-filters a').on('keyup', onFilter);
+
+    $('#journal-prio-menu').on('change', function() {
+        const options = parse_search(document.getElementById("journal-grep").value);
+        update_services_list = true;
+        cockpit.location.go([], $.extend(options, { prio: $(this).val() }));
+    });
+
+    $('#journal-service-menu').on("change", function() {
+        const options = parse_search(document.getElementById("journal-grep").value);
+        update_services_list = false;
+        cockpit.location.go([], $.extend(options, { tag: $(this).val() }));
+    });
+
+    $('#journal-follow').on("click", function() {
+        const state = $(this).attr("data-following") === "true";
+        if (state) {
+            $(this).text(_("Resume"));
+            $(this).attr("data-following", false);
+            the_journal.stop_following();
+        } else {
+            $(this).text(_("Pause"));
+            $(this).attr("data-following", true);
+
+            const cursor = document.querySelector(".cockpit-logline");
+            if (cursor)
+                the_journal.follow(cursor.getAttribute("data-cursor"));
+            else
+                the_journal.follow();
+        }
     });
 
     $('#journal-navigate-home').on("click", function() {
@@ -949,5 +1076,25 @@ $(function() {
         cockpit.location.go('/', parent_options);
     });
 
+    $(".filters-toggle button").on("click", () => {
+        if ($("#journal .content-header-extra").hasClass("toggle-filters-closed"))
+            $(".filters-toggle button").text(_("Hide filters"));
+        else
+            $(".filters-toggle button").text(_("Show filters"));
+        $("#journal .content-header-extra").toggleClass("toggle-filters-closed");
+    });
+
+    $('#journal-grep').on("keyup", function(e) {
+        if (e.keyCode == 13) { // Submitted by enter
+            update_services_list = true;
+            cockpit.location.go([], parse_search($(this).val()));
+        }
+    });
+
+    // Check if the last filter is still on the same line, or it was wrapped.
+    window.addEventListener("resize", fit_filters);
+
+    check_grep();
+    fit_filters();
     update();
 });

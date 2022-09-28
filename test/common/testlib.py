@@ -54,7 +54,6 @@ __all__ = (
     'nondestructive',
     'skipImage',
     'skipBrowser',
-    'allowImage',
     'skipPackage',
     'enableAxe',
     'timeout',
@@ -170,6 +169,12 @@ class Browser:
             msg += "\n" + trailer
         raise Error("%s(%s): %s" % (func, arg, msg))
 
+    # Execute js code that does not return anything
+    def inject_js(self, code):
+        self.cdp.invoke("Runtime.evaluate", expression=code, trace=code,
+                        silent=False, awaitPromise=True, returnByValue=False, no_trace=True)
+
+    # Execute js code that returns something
     def eval_js(self, code, no_trace=False):
         result = self.cdp.invoke("Runtime.evaluate", expression=code, trace=code,
                                  silent=False, awaitPromise=True, returnByValue=True, no_trace=no_trace)
@@ -519,22 +524,24 @@ class Browser:
         else:
             self.click(sel + ' button:first-child')
 
-    def try_login(self, user, password, authorized=True):
+    def try_login(self, user=None, password=None, authorized=True, superuser=True):
         """Fills in the login dialog and clicks the button.
 
         This differs from login_and_go() by not expecting any particular result.
         """
-        self.wait_visible("#login")
-        self.set_val('#login-user-input', user)
-        self.set_val('#login-password-input', password)
-        self.set_checked('#authorized-input', authorized)
-        self.click('#login-button')
-
-    def login_and_go(self, path=None, user=None, host=None, authorized=True, urlroot=None, tls=False, password=None):
         if user is None:
             user = self.default_user
         if password is None:
             password = self.password
+        self.wait_visible("#login")
+        self.set_val('#login-user-input', user)
+        self.set_val('#login-password-input', password)
+        self.set_checked('#authorized-input', authorized)
+        if superuser is not None:
+            self.eval_js('window.localStorage.setItem("superuser:%s", "%s");' % (user, "any" if superuser else "none"))
+        self.click('#login-button')
+
+    def login_and_go(self, path=None, user=None, host=None, authorized=True, superuser=True, urlroot=None, tls=False, password=None):
         href = path
         if not href:
             href = "/"
@@ -544,7 +551,7 @@ class Browser:
             href = "/@" + host + href
         self.open(href, tls=tls)
 
-        self.try_login(user, password, authorized=authorized)
+        self.try_login(user, password, authorized=authorized, superuser=superuser)
 
         self.expect_load()
         self.wait_present('#content')
@@ -565,7 +572,7 @@ class Browser:
             self.click('#go-logout')
         self.expect_load()
 
-    def relogin(self, path=None, user=None, authorized=None):
+    def relogin(self, path=None, user=None, authorized=None, superuser=None):
         if user is None:
             user = self.default_user
         self.logout()
@@ -574,6 +581,8 @@ class Browser:
         self.set_val("#login-password-input", self.password)
         if authorized is not None:
             self.set_checked('#authorized-input', authorized)
+        if superuser is not None:
+            self.eval_js('window.localStorage.setItem("superuser:%s", "%s");' % (user, "any" if superuser else "none"))
         self.click('#login-button')
         self.expect_load()
         self.wait_present('#content')
@@ -702,9 +711,9 @@ class MachineCase(unittest.TestCase):
     provision = None
 
     @classmethod
-    def get_global_machine(klass):
+    def get_global_machine(klass, restrict=True):
         if not klass.global_machine:
-            klass.global_machine = klass.new_machine(klass, cleanup=False)
+            klass.global_machine = klass.new_machine(klass, restrict=restrict, cleanup=False)
             if opts.trace:
                 print("Starting global machine {0}".format(klass.global_machine.label))
             klass.global_machine.start()
@@ -766,7 +775,15 @@ class MachineCase(unittest.TestCase):
         test_method = getattr(self.__class__, self._testMethodName)
         return getattr(test_method, "_testlib__non_destructive", False)
 
-    def setUp(self):
+    def disable_preload(self, *packages):
+        for pkg in packages:
+            self.write_file("/usr/share/cockpit/%s/override.json" % pkg, '{ "preload": [ ] }')
+
+    def enable_preload(self, package, *pages):
+        path = "/usr/share/cockpit/%s/override.json" % package
+        self.write_file(path, '{ "preload": [%s]}' % ', '.join('"{0}"'.format(page) for page in pages))
+
+    def setUp(self, restrict=True):
         if opts.address and self.provision is not None:
             raise unittest.SkipTest("Cannot provision multiple machines if a specific machine address is specified")
 
@@ -780,7 +797,7 @@ class MachineCase(unittest.TestCase):
         if self.is_nondestructive() and not opts.address:
             if self.provision:
                 raise unittest.SkipTest("Cannot provision machines if test is marked as nondestructive")
-            self.machine = self.machines['machine1'] = MachineCase.get_global_machine()
+            self.machine = self.machines['machine1'] = MachineCase.get_global_machine(restrict=restrict)
         else:
             self.machine = None
             # First create all machines, wait for them later
@@ -792,6 +809,8 @@ class MachineCase(unittest.TestCase):
                     del options['dns']
                 if 'dhcp' in options:
                     del options['dhcp']
+                if 'restrict' not in options:
+                    options['restrict'] = restrict
                 machine = self.new_machine(**options)
                 self.machines[key] = machine
                 if not self.machine:
@@ -800,14 +819,9 @@ class MachineCase(unittest.TestCase):
                     print("Starting {0} {1}".format(key, machine.label))
                 machine.start()
 
-        if self.machine.image == "rhel-8-2-distropkg":
-            self.danger_btn_class = '.btn-danger'
-            self.primary_btn_class = '.btn-primary'
-            self.default_btn_class = '.btn-default'
-        else:
-            self.danger_btn_class = '.pf-m-danger'
-            self.primary_btn_class = '.pf-m-primary'
-            self.default_btn_class = '.pf-m-secondary'
+        self.danger_btn_class = '.pf-m-danger'
+        self.primary_btn_class = '.pf-m-primary'
+        self.default_btn_class = '.pf-m-secondary'
 
         # Now wait for the other machines to be up
         for key in self.machines.keys():
@@ -824,8 +838,16 @@ class MachineCase(unittest.TestCase):
                 machine.dhcp_server()
 
         if self.machine:
+            # Pages with debug enabled are huge and loading/executing them is heavy for browsers
+            # To make it easier for browsers and thus make tests quicker, disable packagekit and systemd preloads
+            # Only "TEST_OS_DEFAULT" has debug build enabled, see `build_and_install()` in `test/image-prepare`
+            if self.machine.image == testvm.TEST_OS_DEFAULT:
+                self.disable_preload("packagekit", "systemd")
+
             self.journal_start = self.machine.journal_cursor()
             self.browser = self.new_browser()
+            # fail tests on criticals
+            self.machine.write("/etc/cockpit/cockpit.conf", "[Log]\nFatal = criticals\n")
             if self.is_nondestructive():
                 self.nonDestructiveSetup()
 
@@ -833,6 +855,14 @@ class MachineCase(unittest.TestCase):
         '''generic setUp/tearDown for @nondestructive tests'''
 
         m = self.machine
+
+        # helps with mapping journal output to particular tests
+        name = "%s.%s" % (self.__class__.__name__, self._testMethodName)
+        m.execute("logger -p user.info 'COCKPITTEST: start %s'" % name)
+        self.addCleanup(m.execute, "logger -p user.info 'COCKPITTEST: end %s'" % name)
+
+        # core dumps get copied per-test, don't clobber subsequent tests with them
+        self.addCleanup(m.execute, "rm -rf /var/lib/systemd/coredump")
 
         # temporary directory in the VM
         self.addCleanup(m.execute, "if [ -d {0} ]; then findmnt --list --noheadings --output TARGET | grep ^{0} | xargs -r umount && rm -r {0}; fi".format(self.vm_tmpdir))
@@ -851,6 +881,7 @@ class MachineCase(unittest.TestCase):
 
         # cockpit configuration
         self.addCleanup(m.execute, "rm -f /etc/cockpit/cockpit.conf")
+        self.addCleanup(m.execute, "rm -f /etc/cockpit/machines.d/*")
 
         if not m.ostree_image:
             # for storage tests
@@ -858,7 +889,12 @@ class MachineCase(unittest.TestCase):
             self.restore_file("/etc/crypttab")
 
             # tests expect cockpit.service to not run at start; also, avoid log leakage into the next test
-            self.addCleanup(m.execute, "systemctl stop cockpit")
+            self.addCleanup(m.execute, "systemctl stop --quiet cockpit")
+
+        # The sssd daemon seems to get confused when we restore
+        # backups of /etc/group etc and stops following updates to it.
+        # Let's restart the daemon to reset that condition.
+        m.execute("systemctl try-restart sssd || true")
 
         # reset scsi_debug (see e. g. StorageHelpers.add_ram_disk()
         # this needs to happen very late in the cleanup, so that test cases can clean up the users of that disk first
@@ -873,15 +909,20 @@ class MachineCase(unittest.TestCase):
                         "    umount /dev/$dev 2>/dev/null || true; "
                         "done; until rmmod scsi_debug; do sleep 1; done")
 
+        # Terminate all lingering Cockpit sessions
+        self.addCleanup(self.machine.execute,
+                        "loginctl --no-legend list-sessions | awk '/web console/ { print $1 }' | "
+                        "xargs --no-run-if-empty -L1 loginctl terminate-session")
+
     def tearDown(self):
         if self.checkSuccess() and self.machine.ssh_reachable:
             self.check_journal_messages()
             self.check_browser_errors()
         shutil.rmtree(self.tmpdir)
 
-    def login_and_go(self, path=None, user=None, host=None, authorized=True, urlroot=None, tls=False):
+    def login_and_go(self, path=None, user=None, host=None, authorized=True, superuser=True, urlroot=None, tls=False):
         self.machine.start_cockpit(host, tls=tls)
-        self.browser.login_and_go(path, user=user, host=host, authorized=authorized, urlroot=urlroot, tls=tls)
+        self.browser.login_and_go(path, user=user, host=host, authorized=authorized, superuser=superuser, urlroot=urlroot, tls=tls)
 
     allow_core_dumps = False
 
@@ -929,9 +970,6 @@ class MachineCase(unittest.TestCase):
         "(audit: )?type=1400 .*denied.*comm=\"ssh-transport-c\".*name=\"unix\".*dev=\"proc\".*",
         "(audit: )?type=1400 .*denied.*comm=\"cockpit-ssh\".*name=\"unix\".*dev=\"proc\".*",
 
-        # https://bugzilla.redhat.com/show_bug.cgi?id=1795524
-        "(audit: )?type=1400 .*denied  { setsched } .* comm=\"cockpit-ws\".*",
-
         # apparmor loading
         "(audit: )?type=1400.*apparmor=\"STATUS\".*",
 
@@ -949,7 +987,19 @@ class MachineCase(unittest.TestCase):
 
         # our core dump retrieval is not entirely reliable
         "Failed to send coredump datagram:.*",
+
+        # Something crashed, but we don't have more info. Don't fail on that
+        "Failed to get (COMM|EXE).*: No such process",
+
+        # The usual sudo finger wagging
+        "We trust you have received the usual lecture from the local System",
+        "Administrator. It usually boils down to these three things:",
+        "#1\) Respect the privacy of others.",
+        "#2\) Think before you type.",
+        "#3\) With great power comes great responsibility.",
     ]
+
+    allowed_messages += os.environ.get("TEST_ALLOW_JOURNAL_MESSAGES", "").split(",")
 
     # Whitelist of allowed console.error() messages during tests; these match substrings
     allowed_console_errors = [
@@ -957,6 +1007,8 @@ class MachineCase(unittest.TestCase):
         "Warning: .* setState.*on an unmounted component",
         "Warning: Can't perform a React state update on an unmounted component."
     ]
+
+    allowed_console_errors += os.environ.get("TEST_ALLOW_BROWSER_ERRORS", "").split(",")
 
     def allow_journal_messages(self, *patterns):
         """Don't fail if the journal contains a entry completely matching the given regexp"""
@@ -1009,11 +1061,6 @@ class MachineCase(unittest.TestCase):
                                     "sudo: unable to stat /var/db/sudo: Permission denied",
                                     ".*: sorry, you must have a tty to run sudo",
                                     ".*/pkexec: bridge exited",
-                                    "We trust you have received the usual lecture from the local System",
-                                    "Administrator. It usually boils down to these three things:",
-                                    "#1\) Respect the privacy of others.",
-                                    "#2\) Think before you type.",
-                                    "#3\) With great power comes great responsibility.",
                                     ".*Sorry, try again.",
                                     ".*incorrect password attempt.*")
 
@@ -1029,13 +1076,17 @@ class MachineCase(unittest.TestCase):
         if "TEST_AUDIT_NO_SELINUX" not in os.environ:
             messages += machine.audit_messages("14", cursor=cursor) # 14xx is selinux
 
-        if self.image in ['fedora-32', 'fedora-31', 'fedora-testing']:
-            # Fedora >= 30 switched to dbus-broker
+        if self.image.startswith('debian'):
+            # Debian images don't have any non-C locales (mostly deliberate, to test this scenario somewhere)
+            self.allowed_messages.append("invalid or unusable locale: .*")
+
+        if self.image.startswith('fedora'):
+            # Fedora switched to dbus-broker
             self.allowed_messages.append("dbus-daemon didn't send us a dbus address; not installed?.*")
 
-        if self.image in ['rhel-8-2', 'rhel-8-2-distropkg']:
-            # HACK: https://bugzilla.redhat.com/show_bug.cgi?id=1753991
-            self.allowed_messages.append('.*type=1400.*avc:  denied  { dac_override } .* comm="rhsmd" .* scontext=system_u:system_r:rhsmcertd_t:s0-s0:c0.c1023 tcontext=system_u:system_r:rhsmcertd_t:.*')
+        if self.image in ['rhel-8-3', 'rhel-8-3-distropkg']:
+            # HACK: https://bugzilla.redhat.com/show_bug.cgi?id=1835909
+            self.allowed_messages.append('.*type=1400.*avc:  denied  { read write } .* comm="qemu-kvm" path="/dev/mapper/control".*')
 
         if self.image in ['debian-testing']:
             # HACK: https://bugs.debian.org/951477
@@ -1055,6 +1106,14 @@ class MachineCase(unittest.TestCase):
             if not m:
                 continue
             found = False
+
+            # When coredump could not be generated, we cannot do much with info about there being a coredump
+            # Ignore this message and all subsequent core dumps
+            # If there is more than just one line about coredump, it will fail and show this messages
+            if m == "Failed to generate stack trace: (null)":
+                self.allowed_messages.append("Process .* of user .* dumped core.*")
+                continue
+
             for p in self.allowed_messages:
                 match = re.match(p, m)
                 if match and match.group(0) == m:
@@ -1087,7 +1146,7 @@ class MachineCase(unittest.TestCase):
                 if re.search(p, log):
                     break
             else:
-                raise Error(log)
+                raise Error("FAIL: Test completed, but found unexpected browser errors:\n" + log)
 
     def check_axe(self, label=None, suffix=""):
         """Run aXe check on the currently active frame
@@ -1179,10 +1238,15 @@ class MachineCase(unittest.TestCase):
                     attach(log)
 
     def copy_cores(self, title, label=None):
+        if self.allow_core_dumps:
+            return
         for name, m in self.machines.items():
             if m.ssh_reachable:
                 directory = "%s-%s-%s.core" % (label or self.label(), m.label, title)
                 dest = os.path.abspath(directory)
+                # overwrite core dumps from previous retries
+                if os.path.exists(dest):
+                    shutil.rmtree(dest)
                 m.download_dir("/var/lib/systemd/coredump", dest)
                 try:
                     os.rmdir(dest)
@@ -1301,12 +1365,6 @@ def skipBrowser(reason, *args):
 
 def skipImage(reason, *args):
     if testvm.DEFAULT_IMAGE in args:
-        return unittest.skip("{0}: {1}".format(testvm.DEFAULT_IMAGE, reason))
-    return lambda func: func
-
-
-def allowImage(reason, *args):
-    if testvm.DEFAULT_IMAGE not in args:
         return unittest.skip("{0}: {1}".format(testvm.DEFAULT_IMAGE, reason))
     return lambda func: func
 
@@ -1467,8 +1525,10 @@ def arg_parser(enable_sit=True):
                             help="Sit and wait after test failure")
     parser.add_argument('--nonet', dest="fetch", action="store_false",
                         help="Don't go online to download images or data")
-    parser.add_argument('tests', nargs='*')
+    parser.add_argument('--enable-network', dest='enable_network', action='store_true',
+                        help="Enable network access for tests")
     parser.add_argument("-l", "--list", action="store_true", help="Print the list of tests that would be executed")
+    parser.add_argument('tests', nargs='*')
 
     parser.set_defaults(verbosity=1, fetch=True)
     return parser

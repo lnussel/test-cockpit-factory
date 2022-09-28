@@ -46,14 +46,14 @@ class TestMetrics(MachineCase, StorageHelpers):
         b = self.browser
         m = self.machine
 
-        b.eval_js("""
+        b.inject_js("""
           ph_plot_timestamp = function (sel) {
             var data = $(sel).data("flot_data")[0]['data'];
             return data[data.length-1][0];
           }
         """)
 
-        b.eval_js("""
+        b.inject_js("""
           ph_plot_timestamp_is = function (sel, ts) {
             return ph_plot_timestamp(sel, 0) >= ts;
           }
@@ -69,7 +69,7 @@ class TestMetrics(MachineCase, StorageHelpers):
         # outlier will make us miss the expected plateau.  Such
         # outliers happen frequently with the CPU plot.
 
-        b.eval_js("""
+        b.inject_js("""
           ph_plateau = function (data, min, max, duration, label) {
               var i, j;
               var sum;  // sum of data[i..j]
@@ -90,7 +90,7 @@ class TestMetrics(MachineCase, StorageHelpers):
           }
         """)
 
-        b.eval_js("""
+        b.inject_js("""
           ph_flot_data_plateau = function (sel, min, max, duration, label) {
             return ph_plateau($(sel).data("flot_data")[0]['data'], min, max, duration, label);
           }
@@ -169,9 +169,6 @@ class TestMetrics(MachineCase, StorageHelpers):
 
         m.execute("kill %d" % net_pid)
 
-        if m.image in ["rhel-8-2-distropkg"]:
-            return  # HACK: individual graph pages broken, fixed in PR #13438
-
         el_width = "(function (sel) { return ph_find(sel).offsetWidth; })"
         el_height = "(function (sel) { return ph_find(sel).offsetHeight; })"
 
@@ -185,15 +182,12 @@ class TestMetrics(MachineCase, StorageHelpers):
         b.wait_visible(".server-graph-legend .cpu-kernel")
 
         # go back to graphs overview
-        if m.image != "rhel-8-2-distropkg": # Changed in #13589
-            b.click(".graphs-link")
-        else:
-            b.click("#graphs-link")
+        b.click(".graphs-link")
         b.wait_visible(".ct-graph-memory")
         b.wait_visible(".ct-graph-cpu")
 
         # memory graph page
-        if m.image in ["fedora-coreos", "ubuntu-1804", "ubuntu-2004", "ubuntu-stable", "debian-stable", "debian-testing"]:
+        if m.image in ["fedora-coreos", "ubuntu-2004", "ubuntu-stable", "debian-stable", "debian-testing"]:
             # no swap on these
             b.wait_not_visible("#link-memory-and-swap")
             b.click("#link-memory")
@@ -208,11 +202,10 @@ class TestMetrics(MachineCase, StorageHelpers):
         b.wait_visible(".server-graph-legend .memory-used")
 
         # go back to overview
-        if m.image != "rhel-8-2-distropkg": # Changed in #13589
-            b.click("#complicated_graphs .system-link")
-            b.wait_not_visible("#memory_status_graph")
-            b.enter_page("/system")
-            b.wait_visible(".ct-overview-header-hostname")
+        b.click("#complicated_graphs .system-link")
+        b.wait_not_visible("#memory_status_graph")
+        b.enter_page("/system")
+        b.wait_visible(".ct-overview-header-hostname")
 
     @skipImage("No PCP available", "fedora-coreos")
     def testPcp(self):

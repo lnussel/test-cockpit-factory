@@ -27,9 +27,8 @@ import { NetworkList } from "./components/networks/networkList.jsx";
 import LibvirtSlate from "./components/libvirtSlate.jsx";
 import { CreateVmAction } from "./components/create-vm-dialog/createVmDialog.jsx";
 import { AggregateStatusCards } from "./components/aggregateStatusCards.jsx";
-import { isObjectEmpty } from "./helpers.js";
+import { isObjectEmpty, dummyVmsFilter } from "./helpers.js";
 import { InlineNotification } from 'cockpit-components-inline-notification.jsx';
-import { dummyVmsConvert } from './components/vm/dummyVm.jsx';
 
 var permission = cockpit.permission({ admin: true });
 
@@ -107,7 +106,7 @@ class App extends React.Component {
         const { vms, config, storagePools, systemInfo, ui, networks, nodeDevices, interfaces } = this.props.store.getState();
         const path = this.state.path;
         const dispatch = this.props.store.dispatch;
-        const combinedVms = [...vms, ...dummyVmsConvert(vms, ui.vms)];
+        const combinedVms = [...vms, ...dummyVmsFilter(vms, ui.vms)];
         const properties = {
             dispatch,
             networks, nodeDevices, nodeMaxMemory: config.nodeMaxMemory,
@@ -116,7 +115,7 @@ class App extends React.Component {
         };
         const createVmAction = <CreateVmAction {...properties} mode='create' />;
         const importDiskAction = <CreateVmAction {...properties} mode='import' />;
-        const vmActions = <div> {createVmAction} {importDiskAction} </div>;
+        const vmActions = <> {createVmAction} {importDiskAction} </>;
         const resources = [...storagePools, ...networks, ...nodeDevices, ...interfaces, ...vms];
         const loadingResources = resources.some(resource => isObjectEmpty(resource));
 
@@ -131,7 +130,7 @@ class App extends React.Component {
         const pathVms = path.length == 0 || (path.length > 0 && path[0] == 'vms');
 
         return (
-            <div>
+            <>
                 { pathVms &&
                 <AggregateStatusCards networks={networks} storagePools={storagePools} />
                 }
@@ -176,14 +175,13 @@ class App extends React.Component {
                 {path.length > 0 && path[0] == 'networks' &&
                 <NetworkList networks={networks}
                     dispatch={dispatch}
-                    loggedUser={systemInfo.loggedUser}
                     resourceHasError={this.state.resourceHasError}
                     onAddErrorNotification={this.onAddErrorNotification}
                     vms={vms}
                     nodeDevices={nodeDevices}
                     interfaces={interfaces} />
                 }
-            </div>
+            </>
         );
     }
 }

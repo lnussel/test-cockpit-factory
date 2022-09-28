@@ -18,8 +18,8 @@
  */
 import React from 'react';
 import PropTypes from 'prop-types';
-import { Modal, OverlayTrigger, Tooltip } from 'patternfly-react';
-import { Button } from '@patternfly/react-core';
+import { Modal } from 'patternfly-react';
+import { Button, Tooltip } from '@patternfly/react-core';
 
 import { getStorageVolumesUsage, storagePoolId } from '../../helpers.js';
 import { ModalError } from 'cockpit-components-inline-notification.jsx';
@@ -192,19 +192,16 @@ export class StoragePoolDelete extends React.Component {
 
             if (!canDelete(storagePool, vms) || !storagePool.persistent) {
                 return (
-                    <OverlayTrigger overlay={
-                        <Tooltip id='delete-tooltip'>
-                            { tooltipText }
-                        </Tooltip> } placement='top'>
+                    <Tooltip id='delete-tooltip'
+                             content={tooltipText}>
                         <span>
                             <Button id={`delete-${id}`}
                                 variant='danger'
-                                style={{ pointerEvents: 'none' }}
                                 isDisabled>
                                 {_("Delete")}
                             </Button>
                         </span>
-                    </OverlayTrigger>
+                    </Tooltip>
                 );
             } else {
                 return (
@@ -231,13 +228,13 @@ export class StoragePoolDelete extends React.Component {
                     </Modal.Body>
                     <Modal.Footer>
                         {this.state.dialogError && <ModalError dialogError={this.state.dialogError} dialogErrorDetail={this.state.dialogErrorDetail} />}
-                        <Button variant='secondary' className='btn-cancel' onClick={this.close}>
-                            {_("Cancel")}
-                        </Button>
                         <Button variant='danger'
                             onClick={this.delete}
                             isDisabled={canDeleteOnlyWithoutVolumes(storagePool, vms) && this.state.deleteVolumes}>
                             {_("Delete")}
+                        </Button>
+                        <Button variant='link' className='btn-cancel' onClick={this.close}>
+                            {_("Cancel")}
                         </Button>
                     </Modal.Footer>
                 </Modal>

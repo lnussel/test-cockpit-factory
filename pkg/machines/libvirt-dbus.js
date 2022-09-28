@@ -157,6 +157,8 @@ const Enum = {
     VIR_NETWORK_EVENT_STARTED: 2,
     VIR_NETWORK_EVENT_STOPPED: 3,
     VIR_NETWORK_EVENT_LAST: 4,
+    // Keycodes
+    VIR_KEYCODE_SET_LINUX: 0,
 };
 
 const LIBVIRT_DBUS_PROVIDER = {
@@ -321,9 +323,6 @@ const LIBVIRT_DBUS_PROVIDER = {
         return (dispatch) => call(connectionName, '/org/libvirt/QEMU', 'org.libvirt.Connect', 'StoragePoolDefineXML', [poolXmlDesc, 0], { timeout, type: 'su' })
                 .then(poolPath => {
                     storagePoolPath = poolPath[0];
-                    return call(connectionName, storagePoolPath, 'org.libvirt.StoragePool', 'Create', [Enum.VIR_STORAGE_POOL_CREATE_NORMAL], { timeout, type: 'u' });
-                })
-                .then(() => {
                     const args = ['org.libvirt.StoragePool', 'Autostart', cockpit.variant('b', autostart)];
 
                     return call(connectionName, storagePoolPath, 'org.freedesktop.DBus.Properties', 'Set', args, { timeout, type: 'ssv' });
@@ -450,7 +449,7 @@ const LIBVIRT_DBUS_PROVIDER = {
                     .then(objPaths => {
                         return Promise.all(objPaths[0].map((path) => dispatch(getNetwork({ connectionName, id:path }))));
                     })
-                    .fail(ex => console.warn('GET_ALL_NETWORKS action failed:', JSON.stringify(ex)));
+                    .catch(ex => console.warn('GET_ALL_NETWORKS action failed:', ex.toString()));
         };
     },
 
@@ -460,7 +459,7 @@ const LIBVIRT_DBUS_PROVIDER = {
         return dispatch => {
             call(connectionName, '/org/libvirt/QEMU', 'org.libvirt.Connect', 'ListNodeDevices', [0], { timeout, type: 'u' })
                     .then(objPaths => Promise.all(objPaths[0].map(path => dispatch(getNodeDevice({ connectionName, id:path })))))
-                    .fail(ex => console.warn('GET_ALL_NODE_DEVICES action failed:', JSON.stringify(ex)));
+                    .catch(ex => console.warn('GET_ALL_NODE_DEVICES action failed:', ex.toString()));
         };
     },
 
@@ -480,7 +479,7 @@ const LIBVIRT_DBUS_PROVIDER = {
                                     });
                         }));
                     })
-                    .fail(ex => console.warn('GET_ALL_STORAGE_POOLS action failed:', JSON.stringify(ex)));
+                    .catch(ex => console.warn('GET_ALL_STORAGE_POOLS action failed:', ex.toString()));
         };
     },
 
@@ -491,7 +490,7 @@ const LIBVIRT_DBUS_PROVIDER = {
                         dispatch(deleteUnlistedVMs(connectionName, [], objPaths[0]));
                         return Promise.all(objPaths[0].map((path) => dispatch(getVm({ connectionName, id:path }))));
                     })
-                    .fail(ex => console.warn('GET_ALL_VMS action failed:', JSON.stringify(ex)));
+                    .catch(ex => console.warn('GET_ALL_VMS action failed:', ex.toString()));
         };
     },
 
@@ -534,7 +533,7 @@ const LIBVIRT_DBUS_PROVIDER = {
                         const count = getDomainMaxVCPU(capsXML[0]);
                         dispatch(setHypervisorMaxVCPU({ count, connectionName }));
                     })
-                    .fail(ex => console.warn("GetDomainCapabilities failed: %s", ex));
+                    .catch(ex => console.warn("GetDomainCapabilities failed: %s", ex.toString()));
         }
 
         return unknownConnectionName(setHypervisorMaxVCPU);
@@ -575,7 +574,7 @@ const LIBVIRT_DBUS_PROVIDER = {
                         const network = parseNetDumpxml(xml);
                         dispatch(updateOrAddNetwork(Object.assign({}, props, network), updateOnly));
                     })
-                    .catch(ex => console.warn('GET_NETWORK action failed failed for path', objPath, ex));
+                    .catch(ex => console.warn('GET_NETWORK action failed for path', objPath, ex.toString()));
         };
     },
 
@@ -612,7 +611,7 @@ const LIBVIRT_DBUS_PROVIDER = {
                         const iface = parseIfaceDumpxml(xml);
                         dispatch(updateOrAddInterface(Object.assign({}, props, iface)));
                     })
-                    .catch(ex => console.log('listInactiveInterfaces action failed for path', objPath, ex));
+                    .catch(ex => console.log('listInactiveInterfaces action for path', objPath, ex.toString()));
         };
     },
 
@@ -633,7 +632,7 @@ const LIBVIRT_DBUS_PROVIDER = {
 
                         dispatch(updateOrAddNodeDevice(deviceXmlObject));
                     })
-                    .catch(ex => console.warn('GET_NODE_DEVICE action failed failed for path', objPath, ex));
+                    .catch(ex => console.warn('GET_NODE_DEVICE action failed for path', objPath, ex.toString()));
         };
     },
 
@@ -687,7 +686,7 @@ const LIBVIRT_DBUS_PROVIDER = {
                         else
                             dispatch(updateStorageVolumes({ connectionName, poolName: dumpxmlParams.name, volumes: [] }));
                     })
-                    .catch(ex => console.warn('GET_STORAGE_POOL action failed failed for path', objPath, ex));
+                    .catch(ex => console.warn('GET_STORAGE_POOL action failed for path', objPath, ex.toString()));
         };
     },
 
@@ -731,7 +730,7 @@ const LIBVIRT_DBUS_PROVIDER = {
                         }));
                     });
                 })
-                .fail(ex => console.warn("GET_STORAGE_VOLUMES action failed for pool %s: %s", poolName, JSON.stringify(ex)));
+                .catch(ex => console.warn("GET_STORAGE_VOLUMES action failed for pool %s: %s", poolName, ex.toString()));
     },
 
     /*
@@ -802,7 +801,7 @@ const LIBVIRT_DBUS_PROVIDER = {
                         else
                             dispatch(updateOrAddVm(Object.assign({}, props, dumpxmlParams)));
                     })
-                    .catch(function(ex) { console.warn("GET_VM action failed failed for path", objPath, ex); return cockpit.reject(ex) });
+                    .catch(ex => console.warn("GET_VM action failed for path", objPath, ex.toString()));
         };
     },
 
@@ -1018,7 +1017,7 @@ function doUsagePolling(name, connectionName, objPath) {
                         dispatch(updateVm(props));
                     }
                 })
-                .fail(ex => console.warn(`GetStats(${name}, ${connectionName}) failed: ${JSON.stringify(ex)}`))
+                .catch(ex => console.warn(`GetStats(${name}, ${connectionName}) failed: ${ex.toString()}`))
                 .always(() => dispatch(delayPolling(doUsagePolling(name, connectionName, objPath), null, name, connectionName)));
     };
 }
@@ -1158,7 +1157,7 @@ function domainEventUndefined(connectionName, domPath, dispatch) {
                 else
                     dispatch(getVm({ connectionName, id:domPath, updateOnly: true }));
             })
-            .fail(ex => console.warn('ListDomains action failed:', JSON.stringify(ex)));
+            .catch(ex => console.warn('ListDomains action failed:', ex.toString()));
 }
 
 function domainUpdateOrDelete(connectionName, domPath, dispatch) {
@@ -1170,7 +1169,7 @@ function domainUpdateOrDelete(connectionName, domPath, dispatch) {
                 else // Transient vm will get undefined when stopped
                     dispatch(undefineVm({ connectionName, id:domPath, transientOnly: true }));
             })
-            .fail(ex => console.warn('GET_ALL_NETWORKS action failed:', JSON.stringify(ex)));
+            .catch(ex => console.warn('GET_ALL_NETWORKS action failed:', ex.toString()));
 }
 
 function storagePoolUpdateOrDelete(connectionName, poolPath, dispatch) {
@@ -1181,7 +1180,7 @@ function storagePoolUpdateOrDelete(connectionName, poolPath, dispatch) {
                 else // Transient pool which got undefined when stopped
                     dispatch(undefineStoragePool({ connectionName, id:poolPath }));
             })
-            .fail(ex => console.warn('GET_ALL_NETWORKS action failed:', JSON.stringify(ex)));
+            .catch(ex => console.warn('GET_ALL_NETWORKS action failed:', ex.toString()));
 }
 
 function networkUpdateOrDelete(connectionName, netPath, dispatch) {
@@ -1192,7 +1191,7 @@ function networkUpdateOrDelete(connectionName, netPath, dispatch) {
                 else // Transient network which got undefined when stopped
                     dispatch(undefineNetwork({ connectionName, id:netPath }));
             })
-            .fail(ex => console.warn('GET_ALL_NETWORKS action failed:', JSON.stringify(ex)));
+            .catch(ex => console.warn('GET_ALL_NETWORKS action failed:', ex.toString()));
 }
 
 function startEventMonitorNetworks(connectionName, dispatch) {
@@ -1444,6 +1443,13 @@ export function detachIface(mac, connectionName, id, live, persistent, dispatch)
             .then(() => dispatch(getVm({ connectionName, id })));
 }
 
+export function domainSendKey(connectionName, id, keyCodes) {
+    const holdTime = 0;
+    const flags = 0;
+
+    return call(connectionName, id, 'org.libvirt.Domain', 'SendKey', [Enum.VIR_KEYCODE_SET_LINUX, holdTime, keyCodes, flags], { timeout, type: "uuauu" });
+}
+
 export function getAllInterfaces(dispatch, connectionName) {
     const flags = Enum.VIR_CONNECT_LIST_INTERFACES_ACTIVE | Enum.VIR_CONNECT_LIST_INTERFACES_INACTIVE;
 
@@ -1451,7 +1457,7 @@ export function getAllInterfaces(dispatch, connectionName) {
             .then((ifaces) => {
                 return Promise.all(ifaces[0].map(path => dispatch(getInterface({ connectionName, id:path }))));
             })
-            .fail(ex => console.warn('getAllInterfaces action failed:', JSON.stringify(ex)));
+            .catch(ex => console.warn('getAllInterfaces action failed:', ex.toString()));
 }
 
 export function getDomainCapabilities(connectionName) {
@@ -1463,7 +1469,7 @@ function initResource(connectionName, method, updateOrAddMethod, flags) {
             .then(objPaths => {
                 return Promise.all(objPaths[0].map(() => updateOrAddMethod({})));
             })
-            .fail(ex => console.warn('initResource action failed:', JSON.stringify(ex)));
+            .catch(ex => console.warn('initResource action failed:', ex.toString()));
 }
 
 export function networkActivate(connectionName, objPath) {

@@ -22,8 +22,8 @@ from storagelib import *
 from testlib import *
 
 
-@skipImage("UDisks doesn't have support for multipath", "debian-stable", "debian-testing", "ubuntu-1804", "ubuntu-2004", "ubuntu-stable")
-class TestStorage(StorageCase):
+@skipImage("UDisks doesn't have support for multipath", "debian-stable", "debian-testing", "ubuntu-2004", "ubuntu-stable")
+class TestStorageMultipath(StorageCase):
 
     def testBasic(self):
         m = self.machine
@@ -59,7 +59,7 @@ class TestStorage(StorageCase):
         self.login_and_go("/storage")
         b.wait_in_text("#drives", "VirtIO")
 
-        b.eval_js("""
+        b.inject_js("""
           ph_texts = function (sel) {
             return ph_select(sel).map(function (e) { return e.textContent });
           }""")

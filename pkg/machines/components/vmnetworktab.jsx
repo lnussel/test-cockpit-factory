@@ -24,12 +24,12 @@ import cockpit from 'cockpit';
 import { changeNetworkState, getVm } from "../actions/provider-actions.js";
 import { rephraseUI, vmId } from "../helpers.js";
 import AddNIC from './nicAdd.jsx';
-import EditNICAction from './nicEdit.jsx';
+import { EditNICModal } from './nicEdit.jsx';
 import WarningInactive from './warningInactive.jsx';
 import './nic.css';
 import { detachIface, vmInterfaceAddresses } from '../libvirt-dbus.js';
 import { ListingTable } from "cockpit-components-table.jsx";
-import { DeleteResource } from './deleteResource.jsx';
+import { DeleteResourceButton, DeleteResourceModal } from './deleteResource.jsx';
 
 const _ = cockpit.gettext;
 
@@ -38,7 +38,7 @@ class VmNetworkTab extends React.Component {
         super(props);
 
         this.state = {
-            showModal: false,
+            showAddNICModal: false,
             interfaceAddress: [],
             networkDevices: undefined,
         };
@@ -48,21 +48,21 @@ class VmNetworkTab extends React.Component {
     }
 
     close() {
-        this.setState({ showModal: false });
+        this.setState({ showAddNICModal: false });
     }
 
     open() {
-        this.setState({ showModal: true });
+        this.setState({ showAddNICModal: true });
     }
 
     componentDidMount() {
-        cockpit.spawn(["ls", "/sys/class/net"])
-                .fail(e => console.log(e))
-                .done(output => {
-                    const devs = output.split('\n');
-                    devs.pop();
+        // only consider symlinks -- there might be other stuff like "bonding_masters" which we don't want
+        cockpit.spawn(["find", "/sys/class/net", "-type", "l", "-printf", '%f\n'], { err: "message" })
+                .then(output => {
+                    const devs = output.trim().split('\n');
                     this.setState({ networkDevices: devs });
-                });
+                })
+                .catch(e => console.warn("could not read /sys/class/net:", e.toString()));
 
         if (this.props.vm.state != 'running' && this.props.vm.state != 'paused')
             return;
@@ -207,23 +207,37 @@ class VmNetworkTab extends React.Component {
                 name: "", value: (network, networkId) => {
                     const isUp = network.state === 'up';
                     const editNICAction = () => {
-                        if (vm.persistent && this.state.networkDevices !== undefined)
-                            return <EditNICAction dispatch={dispatch}
-                                       idPrefix={`${id}-network-${networkId}`}
-                                       vm={vm}
-                                       network={network}
-                                       nodeDevices={nodeDevices}
-                                       availableSources={availableSources}
-                                       interfaces={interfaces} />;
+                        const editNICDialogProps = {
+                            dispatch,
+                            idPrefix: `${id}-network-${networkId}`,
+                            vm,
+                            network,
+                            nodeDevices,
+                            availableSources,
+                            interfaces,
+                            onClose: () => this.setState({ editNICDialogProps: undefined }),
+                        };
+                        if (vm.persistent && this.state.networkDevices !== undefined) {
+                            return (
+                                <Button id={`${editNICDialogProps.idPrefix}-edit-dialog`} variant='secondary'
+                                        onClick={() => this.setState({ editNICDialogProps })}>
+                                    {_("Edit")}
+                                </Button>
+                            );
+                        }
                     };
 
+                    const deleteDialogProps = {
+                        objectType: "Network Interface",
+                        objectName: network.mac,
+                        onClose: () => this.setState({ deleteDialogProps: undefined }),
+                        deleteHandler: () => detachIface(network.mac, vm.connectionName, vm.id, vm.state === 'running', vm.persistent, dispatch),
+                    };
                     const deleteNICAction = (
-                        <DeleteResource objectType="Network Interface"
-                                        objectName={network.mac}
-                                        objectId={`${id}-iface-${networkId}`}
-                                        disabled={vm.state != 'shut off' && vm.state != 'running'}
-                                        overlayText={_("The VM needs to be running or shut off to detach this device")}
-                                        deleteHandler={() => detachIface(network.mac, vm.connectionName, vm.id, vm.state === "running", vm.persistent, dispatch)} />
+                        <DeleteResourceButton objectId={`${id}-iface-${networkId}`}
+                                              disabled={vm.state != 'shut off' && vm.state != 'running'}
+                                              showDialog={() => this.setState({ deleteDialogProps })}
+                                              overlayText={_("The VM needs to be running or shut off to detach this device")} />
                     );
 
                     return (
@@ -262,11 +276,13 @@ class VmNetworkTab extends React.Component {
 
         return (
             <div className="machines-network-list">
+                {this.state.deleteDialogProps && <DeleteResourceModal {...this.state.deleteDialogProps} />}
+                {this.state.editNICDialogProps && <EditNICModal {...this.state.editNICDialogProps } />}
                 <Button id={`${id}-add-iface-button`} variant='secondary' className='pull-right' onClick={this.open}>
                     {_("Add Network Interface")}
                 </Button>
 
-                {this.state.showModal && this.state.networkDevices !== undefined &&
+                {this.state.showAddNICModal && this.state.networkDevices !== undefined &&
                     <AddNIC dispatch={dispatch}
                         idPrefix={`${id}-add-iface`}
                         vm={vm}
@@ -274,11 +290,14 @@ class VmNetworkTab extends React.Component {
                         availableSources={availableSources}
                         interfaces={interfaces}
                         close={this.close} />}
-                <ListingTable aria-label={`VM ${vm.name} Network Interface Cards`}
-                    variant='compact'
-                    emptyCaption={_("No network interfaces defined for this VM")}
-                    columns={columnTitles}
-                    rows={rows} />
+
+                <div className="ct-table-wrapper">
+                    <ListingTable aria-label={`VM ${vm.name} Network Interface Cards`}
+                        variant='compact'
+                        emptyCaption={_("No network interfaces defined for this VM")}
+                        columns={columnTitles}
+                        rows={rows} />
+                </div>
             </div>
         );
     }

@@ -17,10 +17,11 @@
  * along with Cockpit; If not, see <http://www.gnu.org/licenses/>.
  */
 
+import '../../src/base1/patternfly-cockpit.scss';
+
 import { machines } from "machines";
 import { new_machine_dialog_manager } from "machine-dialogs";
 import * as credentials from "./credentials";
-import * as privileges from "./privileges";
 import * as indexes from "./indexes";
 
 var machines_inst = machines.instance();
@@ -42,16 +43,12 @@ document.addEventListener("click", function(ev) {
 }, true);
 
 var options = {
-    brand_sel: "#index-brand",
     logout_sel: "#go-logout",
     oops_sel: "#navbar-oops",
     language_sel: "#display-language",
     about_sel: "#about-version",
-    account_sel: "#go-account",
-    user_sel: "#content-user-name",
     killer_sel: "#active-pages",
     default_title: "Cockpit",
-    privileges: privileges.instance(),
 };
 
 indexes.machines_index(options, machines_inst, loader, dialogs);

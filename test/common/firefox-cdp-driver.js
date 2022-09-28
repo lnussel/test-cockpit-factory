@@ -92,6 +92,12 @@ function setupLogging(client) {
         if (details.exception && details.exception.className === "PhWaitCondTimeout")
             return;
 
+        // HACK: Sometimes on Firefox >= 77 xterm.js can raise following message when Cockpit is reloaded:
+        // `InvalidStateError: An attempt was made to use an object that is not, or is no longer, usable`
+        // It does not oops, everything is functional, safe to ignore for now
+        if (details.exception && details.exception.className === "InvalidStateError")
+            return;
+
         process.stderr.write(details.description || JSON.stringify(details) + "\n");
 
         unhandledExceptions.push(details.exception.message ||
@@ -107,6 +113,7 @@ function setupLogging(client) {
         // HACK: Firefox does not implement `Runtime.exceptionThrown` but logs it
         // Lets parse it to have at least some basic check that code did not throw
         // exception
+        // https://bugzilla.mozilla.org/show_bug.cgi?id=1549528
         if (entry.entry.stackTrace !== undefined &&
             typeof entry.entry.text === "string" &&
             entry.entry.text.indexOf("Error: ") !== -1) {
@@ -207,8 +214,9 @@ function setupFrameTracking(client) {
     });
 
     // track execution contexts so that we can map between context and frame IDs
-    // Also since firefox does not send frames names in FrameNavigated, nor it does
+    // HACK: Also since firefox does not send frames names in FrameNavigated, nor it does
     // not send all frameNavigated, just read it from context
+    // https://bugzilla.mozilla.org/show_bug.cgi?id=1549529
     client.Runtime.executionContextCreated(info => {
         debug("executionContextCreated " + JSON.stringify(info));
         scriptsOnNewContext.forEach(s => {
@@ -235,6 +243,7 @@ function getFrameExecId(frame) {
         frame = "cockpit1";
     // HACK: Remember the frame name that was last resolved in case it was unusable
     // In that case we should try to resolve it a bit later - but we don't have the name anymore
+    // https://bugzilla.mozilla.org/show_bug.cgi?id=1549529
     last_frame_name = frame;
     return frameNameToContextId[frame];
 }
@@ -291,10 +300,10 @@ if (process.argv.length >= 3) {
     }
 }
 
-// HACK
-// `addScriptToEvaluateOnNewDocument` is not implemented in Firefox
+// HACK: `addScriptToEvaluateOnNewDocument` is not implemented in Firefox
 // thus save all scripts in array and on each new context just execute these
 // scripts in them
+// https://bugzilla.mozilla.org/show_bug.cgi?id=1549465
 function addScriptToEvaluateOnNewDocument(script) {
     return new Promise((resolve, reject) => {
         scriptsOnNewContext.push(script.source);
@@ -302,13 +311,9 @@ function addScriptToEvaluateOnNewDocument(script) {
     });
 }
 
-// HACK
-// We cannot use 'Runtime.evaluate' when it return promise in Firefox because:
-// 1. https://chromedevtools.github.io/devtools-protocol/tot/Runtime#method-evaluate
-//  has `awaitPromise` but it is not implemented (so it return RemoteObject
-//  (https://chromedevtools.github.io/devtools-protocol/tot/Runtime#type-RemoteObject) with
-//  subtype=promise. We could use https://chromedevtools.github.io/devtools-protocol/tot/Runtime#method-awaitPromise
-//  but it is not implemented in Firefox. We can do this manually.
+// HACK: We don't get frame name when context is created, but we need to read it the frame itself.
+// This can cause race and thus we need to re-check if contextId was not updated.
+// https://bugzilla.mozilla.org/show_bug.cgi?id=1549529
 function evaluate(cmd) {
     return new Promise((resolve, reject) => {
         const match_exp = cmd.expression.match(/ph_wait_cond[^=]*=>\s*([\s\S]*),\s*(\d*)/);
@@ -396,33 +401,12 @@ CDP(options)
 
                     // run the command
                     eval(command).then(reply => {
-                        // HACK: Runtime.evaluate has option returnByValue but Firefox does not
-                        // implement it and thus returns just RemoteObject of type 'array' with no
-                        // data. These data need to be gathered differently.
-                        if (reply && reply.result && reply.result.subtype === "array") {
-                            client.Runtime.getProperties({objectId: reply.result.objectId}).then(r => {
-                                if (unhandledExceptions.length === 0) {
-                                    success({result: {
-                                        type: "array",
-                                        // HACK: getProperties has two ways how to get only own
-                                        // properties, but neither is implemented in Firefox
-                                        value: r.result.filter(x => x.isOwn && x.configurable).map(x => x.value.value),
-                                        }
-                                    });
-                                } else {
-                                    let message = unhandledExceptions[0];
-                                    fail(message.split("\n")[0]);
-                                    clearExceptions();
-                                }
-                            });
+                        if (unhandledExceptions.length === 0) {
+                            success(reply);
                         } else {
-                            if (unhandledExceptions.length === 0) {
-                                success(reply);
-                            } else {
-                                let message = unhandledExceptions[0];
-                                fail(message.split("\n")[0]);
-                                clearExceptions();
-                            }
+                            let message = unhandledExceptions[0];
+                            fail(message.split("\n")[0]);
+                            clearExceptions();
                         }
                     }, fail);
 

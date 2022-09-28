@@ -101,7 +101,7 @@ account    required     pam_succeed_if.so user ingroup %s""" % m.get_admin_group
         b.try_login("admin", "foobar")
         b.expect_load()
         b.wait_present("#content")
-        b.wait_text('#content-user-name', 'Administrator')
+        b.wait_text('#current-username', 'admin')
 
         if m.image not in ['fedora-coreos']: # logs in via ssh, not cockpit-session
             self.assertRegex(m.execute("who"), r"(^|\n)admin *web")
@@ -109,13 +109,12 @@ account    required     pam_succeed_if.so user ingroup %s""" % m.get_admin_group
         # reload, which should log us in with the cookie
         b.reload()
         b.wait_present("#content")
-        b.wait_text('#content-user-name', 'Administrator')
+        b.wait_text('#current-username', 'admin')
 
         if m.image not in ['fedora-coreos']: # logs in via ssh, not cockpit-session
             self.assertRegex(m.execute("who"), r"(^|\n)admin *web")
 
-        b.click("#content-user-name")
-        b.click('#go-account')
+        b.go("/users#/admin")
         b.enter_page("/users")
         b.wait_text("#account-user-name", "admin")
         try:
@@ -164,6 +163,79 @@ account    required     pam_succeed_if.so user ingroup %s""" % m.get_admin_group
                                     "pam_succeed_if\(cockpit:auth\): requirement .* not met by user .*")
 
         self.allow_restart_journal_messages()
+        self.allow_authorize_journal_messages()
+
+
+    @skipImage("logs in via ssh, not cockpit-session", "fedora-coreos")
+    def testLogging(self):
+        m = self.machine
+        b = self.browser
+
+        def assert_messages(has_last, n_fail):
+            if has_last:
+                b.wait_present('#login-messages')
+                b.wait_present('#last-login')
+                b.wait_in_text('#last-login', "Last login")
+
+                if n_fail:
+                    b.wait_present('#last-failed-login')
+                    b.wait_in_text('#login-messages', 'There were {} failed'.format(n_fail))
+                else:
+                    self.assertFalse(b.is_present('#last-failed-login'))
+                    b.wait_not_in_text('#login-messages', 'failed')
+
+            else:
+                assert not n_fail
+                b.wait_present('#login-messages[empty=yes]')
+                self.assertFalse(b.is_present('#last-login'))
+                self.assertFalse(b.is_present('#last-failed-login'))
+
+        def verify_correct(has_last, n_fail):
+            b.login_and_go('/system')
+            assert_messages(has_last, n_fail)
+
+            # reload and make sure it's still there (or not)
+            b.reload()
+            b.enter_page('/system')
+            assert_messages(has_last, n_fail)
+
+            if has_last:
+                # dismiss and make sure it's gone
+                b.click('#login-messages button')
+                assert_messages(False, 0)
+
+                # reload and make sure it's still gone
+                b.reload()
+                b.enter_page('/system')
+                assert_messages(False, 0)
+
+            b.logout()
+
+        m.start_cockpit()
+
+        # Clean out the relevant logfiles
+        self.restore_file("/var/run/utmp")  # https://bugzilla.redhat.com/show_bug.cgi?id=1783715
+        m.execute("truncate -s0 /var/log/{[bw]tmp,lastlog} /var/run/utmp")
+
+        # First login should have no messages
+        verify_correct(False, 0)
+
+        # Next login should see the last login
+        verify_correct(True, 0)
+
+        # Do some bogus login attempts
+        b.try_login('admin', 'xyz')
+        b.wait_text_not("#login-error-message", "")
+        b.try_login('admin', 'xyz')
+        b.wait_text_not("#login-error-message", "")
+        b.try_login('admin', 'xyz')
+        b.wait_text_not("#login-error-message", "")
+
+        # We should see those bogus attempts now
+        verify_correct(True, 3)
+
+        # But after that login, they should be gone again
+        verify_correct(True, 0)
 
     def testExpired(self):
         m = self.machine
@@ -253,7 +325,7 @@ account    required     pam_succeed_if.so user ingroup %s""" % m.get_admin_group
 
         b.expect_load()
         b.wait_present("#content")
-        b.wait_text('#content-user-name', 'Administrator')
+        b.wait_text('#current-username', 'admin')
 
         self.allow_journal_messages('Error executing command as another user: Not authorized',
                                     'This incident has been reported.',
@@ -298,12 +370,13 @@ account    required     pam_succeed_if.so user ingroup %s""" % m.get_admin_group
 
         b.expect_load()
         b.wait_present("#content")
-        b.wait_text('#content-user-name', 'Administrator')
+        b.wait_text('#current-username', 'admin')
 
         self.allow_restart_journal_messages()
+        self.allow_authorize_journal_messages()
 
-    @skipImage("No tlog", "debian-stable", "debian-testing", "ubuntu-stable", "ubuntu-1804", "ubuntu-2004",
-               "rhel-8-2", "rhel-8-2-distropkg", "centos-8-stream", "fedora-coreos")
+    @skipImage("No tlog", "debian-stable", "debian-testing", "ubuntu-stable", "ubuntu-2004",
+               "rhel-8-3", "rhel-8-3-distropkg", "centos-8-stream", "fedora-coreos")
     def testSessionRecordingShell(self):
         m = self.machine
         b = self.browser
@@ -313,7 +386,7 @@ account    required     pam_succeed_if.so user ingroup %s""" % m.get_admin_group
         # this doesn't actually record anything, but logging into cockpit should work
         m.start_cockpit()
         b.login_and_go("/system", user="user", password="abcdefg")
-        b.wait_present("#restart-button[disabled][data-stable=yes]")
+        b.wait_visible(".pf-c-alert:contains('Web console is running in limited access mode.')")
         b.logout()
 
         self.allow_journal_messages(".*value for the SHELL variable was not found the /etc/shells.*")
@@ -355,61 +428,7 @@ account    required     pam_succeed_if.so user ingroup %s""" % m.get_admin_group
                                     "couldn't parse login input: Malformed input",
                                     "couldn't parse login input: Authentication failed")
 
-    @skipImage("No SELinux", "debian-stable", "debian-testing", "ubuntu-stable", "ubuntu-1804", "ubuntu-2004")
-    @skipImage("No semanage", "fedora-coreos")
-    def testSELinuxRestrictedUserSudo(self):
-        m = self.machine
-        b = self.browser
-
-        # Configure only sudo, and without using cockpit-askpass
-        m.write("/usr/share/cockpit/shell/override.json", """
-{ "bridges": [
-        {
-            "match": {
-                "superuser": null
-            },
-            "spawn": [
-                "/usr/bin/sudo",
-                "cockpit-bridge",
-                "--privileged"
-            ],
-            "privileged": true
-        }
-
-] }
-""")
-        self.addCleanup(m.execute, "rm /usr/share/cockpit/shell/override.json")
-
-        # No password so that it all works without cockpit-askpass
-        m.write("/etc/sudoers.d/admin", "admin ALL=(ALL) NOPASSWD:ALL")
-        self.addCleanup(m.execute, "rm /etc/sudoers.d/admin")
-
-        # Verify that this setup works as expected
-        m.start_cockpit()
-        b.login_and_go("/playground/test")
-        b.click(".super-channel button")
-        b.wait_in_text(".super-channel span", 'result: ')
-        self.assertIn('result: uid=0', b.text(".super-channel span"))
-        b.logout()
-
-        # Now as sysadm_u
-        m.execute("semanage login -a -s sysadm_u admin")
-        self.addCleanup(m.execute, "semanage login -d -s sysadm_u admin")
-
-        m.start_cockpit()
-        b.login_and_go("/playground/test")
-        b.click(".super-channel button")
-        b.wait_in_text(".super-channel span", 'result: ')
-
-        # This should work, but it will not because of
-        # https://bugzilla.redhat.com/show_bug.cgi?id=1814569
-        working_images = [ ] # none yet :-(
-        if m.image in working_images:
-            self.assertIn('result: uid=0', b.text(".super-channel span"))
-        else:
-            self.assertIn('result: access-denied', b.text(".super-channel span"))
-
-    @skipImage("No SELinux", "debian-stable", "debian-testing", "ubuntu-stable", "ubuntu-1804", "ubuntu-2004")
+    @skipImage("No SELinux", "debian-stable", "debian-testing", "ubuntu-stable", "ubuntu-2004")
     @skipImage("No semanage", "fedora-coreos")
     def testSELinuxRestrictedUser(self):
         m = self.machine
@@ -420,9 +439,19 @@ account    required     pam_succeed_if.so user ingroup %s""" % m.get_admin_group
         self.addCleanup(m.execute, "semanage login -d -s user_u unpriv")
         m.start_cockpit()
         b.login_and_go("/system", user="unpriv")
+        # generate lastlog entry
+        b.logout()
+        b.login_and_go("/system", user="unpriv")
         # not an admin
-        b.wait_present("#restart-button[disabled][data-stable=yes]")
-        b.wait_present("#shutdown-group[disabled][data-stable=yes]")
+        b.wait_visible(".pf-c-alert:contains('Web console is running in limited access mode.')")
+
+        # with current SELinux policy, user_u and staff_u are not allowed to read cockpit_tmpfs_t memfd: https://bugzilla.redhat.com/show_bug.cgi?id=1814052
+        if m.image in ["fedora-31", "fedora-32", "fedora-testing", "rhel-8-3", "rhel-8-3-distropkg", "centos-8-stream"]:
+            self.allow_journal_messages('Could not query seals on fd .*: not memfd.*')
+            self.assertFalse(b.is_present('#last-login'))
+        else:
+            b.wait_in_text('#last-login', "Last login:")
+            b.wait_in_text('#last-login', "web console")
 
         b.logout()
         self.allow_authorize_journal_messages()
@@ -444,15 +473,24 @@ account    required     pam_succeed_if.so user ingroup %s""" % m.get_admin_group
         m.execute("semanage login -a -s sysadm_u admin")
         self.addCleanup(m.execute, "semanage login -d -s sysadm_u admin")
         b.login_and_go("/system")
-        # shutdown button should be enabled and working
-        b.click("#restart-button[data-stable=yes]")
-        b.wait_popup("shutdown-dialog")
-        if m.image == "rhel-8-2-distropkg":
-            b.wait_in_text("#shutdown-dialog .btn-danger", 'Restart')
+        # passing login info memfd should work
+        b.logout()
+        b.login_and_go("/system")
+        b.wait_in_text('#last-login', "Last login:")
+        b.wait_in_text('#last-login', "web console")
+
+        b.go("/playground/test")
+        b.enter_page("/playground/test")
+        b.click(".super-channel button")
+        b.wait_in_text(".super-channel span", 'result: ')
+
+        # This should work, but it will not because of
+        # https://bugzilla.redhat.com/show_bug.cgi?id=1814569
+        working_images = [ ] # none yet :-(
+        if m.image in working_images:
+            self.assertIn('result: uid=0', b.text(".super-channel span"))
         else:
-            b.wait_in_text("#shutdown-dialog .pf-m-danger", 'Restart')
-        b.click('#shutdown-dialog button[data-dismiss="modal"]')
-        b.wait_popdown("shutdown-dialog")
+            self.assertIn('result: access-denied', b.text(".super-channel span"))
 
     def testUnsupportedBrowser(self):
         m = self.machine
@@ -477,6 +515,7 @@ account    required     pam_succeed_if.so user ingroup %s""" % m.get_admin_group
         self.allow_journal_messages("received request from bad Origin: .*",
                                     "connection unexpectedly closed by peer",
                                     "Received invalid handshake request from the client")
+        self.allow_authorize_journal_messages()
         self.allow_browser_errors(".*")
 
         m.start_cockpit()
@@ -515,6 +554,132 @@ account    required     pam_succeed_if.so user ingroup %s""" % m.get_admin_group
     @skipImage("Starting on OSTree is weird", "fedora-coreos")
     def testFailingWebsocketSafariNoCA(self):
         self.testFailingWebsocket(safari=True, cacert=False)
+
+    def testTally(self):
+        m = self.machine
+        b = self.browser
+
+        if m.image.startswith('debian') or m.image.startswith('ubuntu'):
+            module = 'pam_tally2'
+            logfile = lambda user: '/var/log/tallylog'
+        elif m.image.startswith('rhel') or m.image.startswith('fedora') or m.image.startswith('cent'):
+            module = 'faillock'
+            logfile = lambda user: '/var/run/faillock/' + user
+        else:
+            raise ValueError('unexpected image name', m.image)
+
+        def expect_fail_count(expected, user="admin", must_exist=True):
+            if must_exist:
+                cksum = m.execute("cksum {}".format(logfile(user)))
+
+            output = m.execute("{} --user {}".format(module, user))
+
+            if module == 'faillock':
+                n_lines = len(output.splitlines())
+                if n_lines:
+                    n_lines -= 2 # remove the header, if it's there
+
+                self.assertEqual(expected, n_lines)
+
+            else: # pam_tally2
+                self.assertIn(' {} '.format(expected), output)
+
+            # make sure the above command didn't change the file
+            if must_exist:
+                self.assertEqual(cksum, m.execute("cksum {}".format(logfile(user))))
+
+        def expect_failed_login(user, password, n_failed):
+            b.try_login(user, password)
+            b.wait_text_not("#login-error-message", "")
+            expect_fail_count(n_failed, user=user)
+
+        def expect_successful_login(user, password):
+            b.login_and_go('/system', user=user, password=password)
+            expect_fail_count(0, user=user)
+            b.logout()
+
+        # ensure we have no module in our pam config already
+        m.execute("! grep -r '{}' /etc/pam.d".format(module))
+
+        # add it to the pam config
+        if module == 'pam_tally2':
+            self.sed_file("/common-auth/ { iauth required pam_tally2.so deny=4\n }", "/etc/pam.d/cockpit")
+        else:
+            # see https://access.redhat.com/solutions/62949
+            self.sed_file("""/pam_unix/ {
+                      s/sufficient/[success=1 default=ignore]/\n
+                      aauth [default=die] pam_faillock.so authfail audit deny=4 unlock_time=600\n
+                      aauth sufficient pam_faillock.so authsucc audit deny=4 unlock_time=600\n
+                      }""", "/etc/pam.d/password-auth")
+
+        m.execute("grep -r '{}' /etc/pam.d".format(module))
+
+        m.start_cockpit()
+
+        # pam_faillock tries to chown the file to be owned by the user itself,
+        # which is currently an selinux fail on the following distros:
+        if m.image in ['centos-8-stream', 'fedora-31', 'fedora-32', 'rhel-8-3', 'rhel-8-3-distropkg']:
+            # https://bugzilla.redhat.com/show_bug.cgi?id=1836182
+            self.allow_journal_messages('.*type=1400.*avc:  denied  { chown }.*comm="cockpit-session".*')
+
+        # start from a clean slate
+        self.restore_file(logfile('admin'))
+        m.execute("rm -f " + logfile('admin'))
+
+        # make sure we can still login
+        b.login_and_go("/system")
+        b.logout()
+
+        if module == 'pam_tally2':
+            # now we should have it
+            m.execute("test -f {}".format(logfile('admin')))
+
+        # and it should show zero fails
+        expect_fail_count(0, must_exist=False)
+
+        # try three bogus login attempts
+        for n in [1, 2, 3]:
+            expect_failed_login("admin", "bad", n)
+        expect_fail_count(3)
+
+        # make sure we can still login
+        expect_successful_login("admin", "foobar")
+
+        # after the success, try three more bogus login attempts
+        for n in [1, 2, 3]:
+            expect_failed_login("admin", "bad", n)
+        expect_successful_login("admin", "foobar")
+
+        # now try four, which should lock the account
+        for n in [1, 2, 3, 4]:
+            expect_failed_login("admin", "bad", n)
+
+        # logging in should fail now
+        if module == 'pam_tally2': # this is counted differently by each module
+            n += 1
+        expect_failed_login("admin", "foobar", n)
+
+        # having given the correct password the last time should not have helped things
+        if module == 'pam_tally2':
+            n += 1
+        expect_failed_login("admin", "foobar", n)
+
+        # but we can reset the lockout
+        m.execute(module + " --reset --user admin")
+        expect_fail_count(0)
+
+        # and login again
+        expect_successful_login("admin", "foobar")
+
+        # fedora-coreos logs in via sshd, which forbids root logging in with a password
+        if m.image not in ['fedora-coreos']:
+            # make sure root never gets locked out
+            for n in range(1, 10):
+                expect_failed_login("root", "bad", n)
+            expect_successful_login("root", "foobar")
+
+        self.allow_restart_journal_messages()
+
 
 if __name__ == '__main__':
     test_main()

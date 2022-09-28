@@ -86,7 +86,7 @@ GZ_RULE = \
 
 UGLIFY_JS = $(srcdir)/node_modules/.bin/uglifyjs
 CLEAN_CSS = $(srcdir)/node_modules/.bin/cleancss
-LESSC = $(srcdir)/node_modules/.bin/lessc
+SASS = $(srcdir)/node_modules/.bin/sass
 
 MIN_JS_RULE = \
 	$(AM_V_GEN) $(MKDIR_P) $(dir $@) && \
@@ -209,7 +209,7 @@ dist/%/Makefile.deps:
 # have a manifest, no actual webpack, so don't call webpack-make for these
 dist/%/stamp: $(WEBPACK_CONFIG) $(srcdir)/tools/webpack-make
 	$(V_WEBPACK) $(MKDIR_P) dist/$* && \
-	(if ls $(srcdir)/pkg/$*/*.html >/dev/null 2>&1; then $(WEBPACK_MAKE) -d dist/$*/Makefile.deps $(WEBPACK_CONFIG); else touch dist/$*/Makefile.deps; fi ) && \
+	(if ls $(srcdir)/pkg/$*/*.html >/dev/null 2>&1; then $(WEBPACK_MAKE) -d dist/$*/Makefile.deps -c $(WEBPACK_CONFIG); else touch dist/$*/Makefile.deps; fi ) && \
 	  touch $@
 
 dist/%/manifest.json: pkg/%/manifest.json
@@ -226,10 +226,10 @@ maintainer-clean-local::
 
 install-data-local:: $(WEBPACK_INSTALL)
 	$(MKDIR_P) $(DESTDIR)$(pkgdatadir)
-	tar -cf - $^ | tar -C $(DESTDIR)$(pkgdatadir) --strip-components=1 -xvf -
+	tar -cf - $^ | tar --no-same-owner -C $(DESTDIR)$(pkgdatadir) --strip-components=1 -xvf -
 install-data-local:: $(WEBPACK_DEBUG)
 	$(MKDIR_P) $(DESTDIR)$(debugdir)$(pkgdatadir)
-	tar -cf - $^ | tar -C $(DESTDIR)$(debugdir)$(pkgdatadir) --strip-components=1 -xvf -
+	tar -cf - $^ | tar --no-same-owner -C $(DESTDIR)$(debugdir)$(pkgdatadir) --strip-components=1 -xvf -
 uninstall-local::
 	find $(DESTDIR)$(pkgdatadir) -ignore_readdir_race -type f -exec rm -f {} \;
 	find $(DESTDIR)$(pkgdatadir) -ignore_readdir_race -type d -empty -delete
@@ -268,14 +268,14 @@ AM_CPPFLAGS = \
 AM_LDFLAGS = -Wl,--as-needed
 
 LOG_DRIVER = $(PYTHON) $(top_srcdir)/tools/tap-driver
-LOG_COMPILER = sh -c '"$$0" "$$@" --tap' # For GLib < 2.62
+LOG_COMPILER = sh -c 'timeout 300 "$$0" "$$@" --tap' # For GLib < 2.62
 
 TEST_EXTENSIONS = .html .sh
 SH_LOG_DRIVER = $(LOG_DRIVER)
 HTML_LOG_DRIVER = $(LOG_DRIVER)
 HTML_TEST_SERVER = $(builddir)/test-server
 
-HTML_LOG_COMPILER = $(PYTHON) $(top_srcdir)/test/common/tap-cdp --strip=$(abs_top_srcdir)/ -- $(HTML_TEST_SERVER)
+HTML_LOG_COMPILER = timeout 60 $(PYTHON) $(top_srcdir)/test/common/tap-cdp --strip=$(abs_top_srcdir)/ -- $(HTML_TEST_SERVER)
 
 VALGRIND_ARGS = --trace-children=yes --quiet --error-exitcode=33 \
 	--suppressions=valgrind-suppressions --gen-suppressions=all \

@@ -19,6 +19,9 @@
 
 import cockpit from "cockpit";
 import $ from "jquery";
+import { superuser } from "superuser";
+
+import '../../src/base1/patternfly-cockpit.scss';
 
 const _ = cockpit.gettext;
 
@@ -174,6 +177,14 @@ function init() {
 
         cockpit.translate();
         $('body').prop("hidden", false);
+
+        function update_admin_allowed() {
+            $("#switch-instructions").toggle(superuser.allowed === false);
+            $("#create-button").toggle(!!superuser.allowed);
+        }
+
+        $(superuser).on("changed", update_admin_allowed);
+        update_admin_allowed();
 
         // Send a 'init' message.  This tells the tests that we
         // are ready to go.

@@ -16,7 +16,7 @@
 # along with Cockpit; If not, see <http://www.gnu.org/licenses/>.
 
 AC_INIT([Cockpit],
-        [m4_esyscmd_s([if [ -e .git ]; then echo $(git describe | tr - . ); else cat .tarball; fi])],
+        [m4_esyscmd_s([if [ -f .tarball ]; then cat .tarball; else echo $(git describe | tr - . ); fi])],
         [devel@lists.cockpit-project.org],
         [cockpit],
         [https://cockpit-project.org/])
@@ -65,7 +65,7 @@ AC_MSG_RESULT($enable_prefix_only)
 #
 
 GLIB_VERSION="2.44"
-LIBSSH_VERSION="0.8"
+LIBSSH_VERSION="0.8.5"
 GIO_VERSION="2.37.4" # For appropriate version of TLS logic
 
 GIO_REQUIREMENT="gio-unix-2.0 >= $GIO_VERSION gio-2.0 >= $GIO_VERSION"
@@ -82,7 +82,7 @@ GIO_CFLAGS="$GIO_CFLAGS -DGLIB_VERSION_MAX_ALLOWED=$GLIB_VERSION_DEF"
 
 PKG_CHECK_MODULES(LIBSYSTEMD, [$LIBSYSTEMD_REQUIREMENT])
 PKG_CHECK_MODULES(JSON_GLIB, [$JSON_GLIB_REQUIREMENT])
-PKG_CHECK_MODULES(POLKIT, [$POLKIT_REQUIREMENT])
+PKG_CHECK_MODULES(POLKIT, [$POLKIT_REQUIREMENT],autodetect_polkit="yes",autodetect_polkit="no")
 PKG_CHECK_MODULES(GNUTLS, [$GNUTLS_REQUIREMENT])
 PKG_CHECK_MODULES(KRB5, [$KRB5_REQUIREMENT])
 
@@ -91,8 +91,24 @@ COCKPIT_LIBS="$GIO_LIBS $JSON_GLIB_LIBS $LIBSYSTEMD_LIBS -lutil -lm"
 AC_SUBST(COCKPIT_CFLAGS)
 AC_SUBST(COCKPIT_LIBS)
 
-COCKPIT_BRIDGE_CFLAGS="$COCKPIT_CFLAGS $POLKIT_CFLAGS"
-COCKPIT_BRIDGE_LIBS="$COCKPIT_LIBS $POLKIT_LIBS"
+# bridge with optional polkit
+AC_ARG_ENABLE(polkit, AC_HELP_STRING([--disable-polkit], [Disable usage of polkit]),,enable_polkit=$autodetect_polkit)
+AC_MSG_CHECKING([whether to build with polkit])
+if test "$enable_polkit" = "yes"; then
+  AC_MSG_RESULT($enable_polkit)
+  if test "$autodetect_polkit" = "no"; then
+    AC_MSG_ERROR([Couldn't find polkit. Try installing polkit])
+  fi
+  COCKPIT_BRIDGE_CFLAGS="$COCKPIT_CFLAGS $POLKIT_CFLAGS"
+  COCKPIT_BRIDGE_LIBS="$COCKPIT_LIBS $POLKIT_LIBS"
+  AC_DEFINE_UNQUOTED([WITH_POLKIT], [], [Build with polkit])
+else
+  enable_polkit="no"
+  AC_MSG_RESULT($enable_polkit)
+  COCKPIT_BRIDGE_CFLAGS="$COCKPIT_CFLAGS"
+  COCKPIT_BRIDGE_LIBS="$COCKPIT_LIBS"
+fi
+AM_CONDITIONAL(WITH_POLKIT, test "$enable_polkit" = "yes")
 AC_SUBST(COCKPIT_BRIDGE_CFLAGS)
 AC_SUBST(COCKPIT_BRIDGE_LIBS)
 
@@ -128,18 +144,6 @@ if test "$enable_ssh" != "no"; then
   enable_ssh="yes"
   AC_MSG_RESULT([$enable_ssh])
   PKG_CHECK_MODULES(LIBSSH, [libssh >= $LIBSSH_VERSION])
-
-  AC_DEFINE_UNQUOTED(WITH_COCKPIT_SSH, 1, [Build cockpit-ssh and include libssh dependency])
-
-  PKG_CHECK_MODULES(LIBSSH_SAFE_PROXY_COMMANDS, [libssh >= 0.8.5],
-    [AC_DEFINE_UNQUOTED(LIBSSH_085, [1], [Fixes to proxy commands and knownhost parsing are available starting libssh-0.8.5])], [0])
-
-  AC_CHECK_LIB(ssh, ssh_get_server_publickey, [
-    AC_DEFINE_UNQUOTED(HAVE_SSH_GET_SERVER_PUBLICKEY, 1, Whether ssh_get_server_publickey is available)
-  ])
-
-  AC_CHECK_DECLS([SSH_PUBLICKEY_HASH_SHA256, ssh_get_fingerprint_hash, ssh_session_has_known_hosts_entry], [], [], [[#include <libssh/libssh.h>]])
-
   COCKPIT_SSH_SESSION_CFLAGS="$COCKPIT_CFLAGS $LIBSSH_CFLAGS $KRB5_CFLAGS"
   COCKPIT_SSH_SESSION_LIBS="$COCKPIT_LIBS $LIBSSH_LIBS $KRB5_LIBS"
   AC_SUBST(COCKPIT_SSH_SESSION_LIBS)
@@ -151,7 +155,6 @@ else
 fi
 
 AM_CONDITIONAL(WITH_COCKPIT_SSH, test "$enable_ssh" = "yes")
-AM_CONDITIONAL(HAVE_SSH_SESSION_HAS_KNOWN_HOSTS_ENTRY, test "$ac_cv_have_decl_ssh_session_has_known_hosts_entry" = "yes")
 
 # pam
 AC_CHECK_HEADER([security/pam_appl.h], ,

@@ -39,7 +39,7 @@ class TestMenu(MachineCase):
         self.login_and_go("/system")
 
         b.switch_to_top()
-        b.click('#navbar-dropdown')
+        b.click('#navbar-docs-dropdown')
         b.click('a[data-target="#about"]')
         b.wait_popup('about')
         b.click('#about button[data-dismiss="modal"]')
@@ -48,7 +48,7 @@ class TestMenu(MachineCase):
         # Test session timeout
         time.sleep(20)
         b.wait_not_visible("#session-timeout-dialog")
-        b.wait_visible("#filter-menus")
+        b.wait_visible("#nav-system")
         b.enter_page("/system")
         b.mouse("#system_information_hardware_text", "mousemove", 24, 24)
         b.switch_to_top()
@@ -66,14 +66,14 @@ class TestMenu(MachineCase):
         b.wait_visible("#login")
         b.wait_visible("#login-info-message")
         b.wait_text("#login-info-message", "You have been logged out due to inactivity.")
-        m.execute("sed -i 's/IdleTimeout = 1/IdleTimeout = 0/' /etc/cockpit/cockpit.conf")
+        m.execute("sed -i '/IdleTimeout/d' /etc/cockpit/cockpit.conf")
         m.restart_cockpit()
         b.reload()
         self.login_and_go("/system")
         b.switch_to_top()
         time.sleep(75)
         b.wait_not_visible("#session-timeout-dialog")
-        b.wait_visible("#filter-menus")
+        b.wait_visible("#nav-system")
 
         self.check_axe("Test-navigation")
 
