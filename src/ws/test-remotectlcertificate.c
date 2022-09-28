@@ -33,6 +33,9 @@
 
 const gchar *config_dir = BUILDDIR "/test-configdir";
 
+static gchar *openssl_path = NULL;
+static gchar *sscg_path = NULL;
+
 typedef struct {
   gint ret;
   gchar *cert_dir;
@@ -44,6 +47,7 @@ typedef struct {
   const gchar *preinstall;
   gboolean readonly_dir;
   gboolean ensure;
+  gboolean needs_openssl;
 } TestFixture;
 
 static void
@@ -99,6 +103,9 @@ setup (TestCase *tc,
       g_assert (g_chmod (tc->cert_dir, 0555) == 0);
     }
 
+  if (fix->needs_openssl && !openssl_path)
+    return;
+
   if (fix->preinstall)
     {
       GError *error = NULL;
@@ -117,7 +124,7 @@ setup (TestCase *tc,
   if (fix->ensure)
     {
       cockpit_expect_info ("Generating temporary certificate*");
-      cockpit_expect_info ("Error generating temporary dummy cert using sscg, falling back to openssl*");
+      cockpit_expect_possible_log (G_LOG_DOMAIN, G_LOG_LEVEL_INFO, "Error generating temporary dummy cert using sscg, falling back to openssl*");
       g_ptr_array_add (ptr, "--ensure");
     }
   g_ptr_array_add (ptr, "--user");
@@ -156,17 +163,113 @@ teardown (TestCase *tc,
 
 
 static void
-test_combine_good (TestCase *test,
-                   gconstpointer data)
+test_success (TestCase *test,
+              gconstpointer data)
 {
-
   g_assert_cmpint (test->ret, ==, 0);
-
 }
 
 static void
-test_combine_bad (TestCase *test,
-                  gconstpointer data)
+test_valid_selfsigned (TestCase *test,
+                       gconstpointer data)
+{
+  GError *error = NULL;
+  g_autoptr(GDir) dir = NULL;
+  const gchar *fname;
+  g_autofree gchar *path = NULL;
+  g_autoptr(GTlsCertificate) certificate = NULL;
+
+  if (!openssl_path)
+    {
+      g_test_skip ("openssl not available");
+      return;
+    }
+
+  g_assert_cmpint (test->ret, ==, 0);
+  dir = g_dir_open (test->cert_dir, 0, &error);
+  g_assert_no_error (error);
+  fname = g_dir_read_name (dir);
+  if (sscg_path)
+    {
+      /* sscg creates a certificate signed by a self-signed CA; files can be in any order */
+      if (strcmp (fname, "0-self-signed-ca.pem") == 0)
+        fname = g_dir_read_name (dir);
+      else
+        g_assert_cmpstr (g_dir_read_name (dir), ==, "0-self-signed-ca.pem");
+    }
+
+  g_assert_cmpstr (fname, ==, "0-self-signed.cert");
+  /* no further file created */
+  g_assert_null (g_dir_read_name (dir));
+
+  /* should be a valid certificate */
+  path = g_build_filename (test->cert_dir, fname, NULL);
+  certificate = g_tls_certificate_new_from_file (path, &error);
+  g_assert_no_error (error);
+  /* set cert as its own CA, as it's self-signed */
+  g_assert_cmpint (g_tls_certificate_verify (certificate, NULL, certificate), ==, 0);
+}
+
+static void
+test_refresh_expired (TestCase *test,
+                      gconstpointer data)
+{
+  GError *error = NULL;
+  g_autofree gchar *oldpath = g_build_filename (test->cert_dir, "alice-expired.cert", NULL);
+  g_autofree gchar *selfsigned_path = g_build_filename (test->cert_dir, "0-self-signed.cert", NULL);
+  g_autoptr(GTlsCertificate) certificate = NULL;
+  char *argv[] = { "certificate", "--user", (gchar *) g_get_user_name (), "--ensure", NULL };
+  int ret;
+
+  if (!openssl_path)
+    {
+      g_test_skip ("openssl not available");
+      return;
+    }
+
+  /* The call in setup() just created a combined certificate out of alice-expired.
+   * Rename it to pretend it was a self-signed one */
+  g_assert_cmpint (g_rename (oldpath, selfsigned_path), ==, 0);
+
+  /* sanity check: cert should be expired */
+  certificate = g_tls_certificate_new_from_file (selfsigned_path, &error);
+  g_assert_no_error (error);
+  g_assert_cmpint (g_tls_certificate_verify (certificate, NULL, certificate), ==, G_TLS_CERTIFICATE_EXPIRED);
+
+  /* call with --ensure again, refreshes the cert */
+  ret = cockpit_remotectl_certificate (4, argv);
+  g_assert_cmpint (ret, ==, 0);
+
+  /* now it's a valid certificate again */
+  test_valid_selfsigned (test, data);
+}
+
+static void
+test_keep_custom_expired (TestCase *test,
+                          gconstpointer data)
+{
+  GError *error = NULL;
+  g_autofree gchar *path = g_build_filename (test->cert_dir, "alice-expired.cert", NULL);
+  g_autofree gchar *orig_content = NULL;
+  g_autofree gchar *new_content = NULL;
+  char *argv[] = { "certificate", "--user", (gchar *) g_get_user_name (), "--ensure", NULL };
+  int ret;
+
+  /* The call in setup() just created a combined certificate out of alice-expired */
+  g_file_get_contents (path, &orig_content, NULL, &error);
+  g_assert_no_error (error);
+
+  /* call with --ensure again; this is a custom certificate, should *not* be touched */
+  ret = cockpit_remotectl_certificate (4, argv);
+  g_assert_cmpint (ret, ==, 0);
+  g_file_get_contents (path, &new_content, NULL, &error);
+  g_assert_no_error (error);
+  g_assert_cmpstr (orig_content, ==, new_content);
+}
+
+static void
+test_failure (TestCase *test,
+              gconstpointer data)
 {
   GDir *dir = NULL;
   GError *error = NULL;
@@ -190,6 +293,8 @@ const gchar *invalid_files1[] = { SRCDIR "/src/ws/mock-config/cockpit/cockpit.co
 const gchar *invalid_files2[] = { SRCDIR "/src/bridge/mock-server.crt",
                                   SRCDIR "/src/bridge/mock-client.crt", NULL };
 const gchar *invalid_files3[] = { SRCDIR "/src/bridge/mock-client.key", NULL };
+const gchar *expired_files[] = { SRCDIR "/src/tls/ca/alice-expired.pem",
+                                 SRCDIR "/src/tls/ca/alice.key", NULL };
 
 /* test both possible orders in combined files: certs|key and key|certs */
 #define combined_key_first SRCDIR "/src/ws/mock-combined.crt"
@@ -230,6 +335,16 @@ static const TestFixture fixture_invalid3 = {
   .files = invalid_files3
 };
 
+static const TestFixture fixture_create = {
+  .files = no_files,
+  .ensure = TRUE,
+  .needs_openssl = TRUE,
+};
+
+static const TestFixture fixture_expired = {
+  .files = expired_files,
+};
+
 static const TestFixture fixture_create_no_permission = {
   .expected_message = "Couldn't create temporary file*Permission denied",
   .files = no_files,
@@ -253,25 +368,34 @@ main (int argc,
 {
   cockpit_test_init (&argc, &argv);
 
+  openssl_path = g_find_program_in_path ("openssl");
+  sscg_path = g_find_program_in_path ("sscg");
+
   g_test_add ("/remotectl-certificate/combine-good-rsa", TestCase, &fixture_good_rsa_file,
-              setup, test_combine_good, teardown);
+              setup, test_success, teardown);
   g_test_add ("/remotectl-certificate/combine-good-ecc", TestCase, &fixture_good_ecc_file,
-              setup, test_combine_good, teardown);
+              setup, test_success, teardown);
   g_test_add ("/remotectl-certificate/combine-bad-file", TestCase, &fixture_bad_file,
-              setup, test_combine_bad, teardown);
+              setup, test_failure, teardown);
   g_test_add ("/remotectl-certificate/combine-bad-file2", TestCase, &fixture_bad_file2,
-              setup, test_combine_bad, teardown);
+              setup, test_failure, teardown);
   g_test_add ("/remotectl-certificate/combine-not-valid", TestCase, &fixture_invalid1,
-              setup, test_combine_bad, teardown);
+              setup, test_failure, teardown);
   g_test_add ("/remotectl-certificate/combine-no-key", TestCase, &fixture_invalid2,
-              setup, test_combine_bad, teardown);
+              setup, test_failure, teardown);
   g_test_add ("/remotectl-certificate/combine-no-cert", TestCase, &fixture_invalid3,
-              setup, test_combine_bad, teardown);
+              setup, test_failure, teardown);
+  g_test_add ("/remotectl-certificate/create", TestCase, &fixture_create,
+              setup, test_valid_selfsigned, teardown);
   g_test_add ("/remotectl-certificate/create-no-permission", TestCase, &fixture_create_no_permission,
-              setup, test_combine_bad, teardown);
+              setup, test_failure, teardown);
+  g_test_add ("/remotectl-certificate/refresh-expired", TestCase, &fixture_expired,
+              setup, test_refresh_expired, teardown);
+  g_test_add ("/remotectl-certificate/keep-custom-expired", TestCase, &fixture_expired,
+              setup, test_keep_custom_expired, teardown);
   g_test_add ("/remotectl-certificate/load-combined-key-first", TestCase, &fixture_preinstall_combined_key_first,
-              setup, test_combine_good, teardown);
+              setup, test_success, teardown);
   g_test_add ("/remotectl-certificate/load-combined-key-last", TestCase, &fixture_preinstall_combined_key_last,
-              setup, test_combine_good, teardown);
+              setup, test_success, teardown);
   return g_test_run ();
 }

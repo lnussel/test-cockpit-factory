@@ -35,6 +35,15 @@
                 "cockpit-bridge",
                 "--privileged"
             ]
+        },
+        {
+            "privileged": true,
+            "spawn": [
+                "@PKEXEC@",
+                "--disable-internal-agent",
+                "cockpit-bridge",
+                "--privileged"
+            ]
         }
     ]
 }

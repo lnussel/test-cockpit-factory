@@ -20,6 +20,7 @@
 import base64
 import subprocess
 import time
+import re
 
 import parent
 from testlib import *
@@ -98,9 +99,7 @@ account    required     pam_succeed_if.so user ingroup %s""" % m.get_admin_group
 
         # Login as admin
         b.open("/system")
-        b.try_login("admin", "foobar")
-        b.expect_load()
-        b.wait_present("#content")
+        b.login_and_go()
         b.wait_text('#current-username', 'admin')
 
         if m.image not in ['fedora-coreos']: # logs in via ssh, not cockpit-session
@@ -119,7 +118,7 @@ account    required     pam_succeed_if.so user ingroup %s""" % m.get_admin_group
         b.wait_text("#account-user-name", "admin")
         try:
             m.execute("journalctl -p 7 SYSLOG_IDENTIFIER=cockpit-ws | grep 'cockpit-session: opening pam session'")
-            assert False, "cockpit-session debug messsages found"
+            assert False, "cockpit-session debug messages found"
         except subprocess.CalledProcessError:
             pass
 
@@ -153,9 +152,7 @@ account    required     pam_succeed_if.so user ingroup %s""" % m.get_admin_group
                       "echo 'echo noise-profile-out; echo noise-profile-err >&2' >> .profile")
             self.addCleanup(m.execute, "set -e; cd ~admin; mv .bashrc.bak .bashrc; "
                                        "if [ -e .profile.bak ]; then mv .profile.bak .profile; else rm .profile; fi")
-            b.try_login("admin", "foobar")
-            b.expect_load()
-            b.wait_present("#content")
+            b.login_and_go()
 
         self.allow_journal_messages("Returning error-response ... with reason .*",
                                     "pam_unix\(cockpit:auth\): authentication failure; .*",
@@ -243,8 +240,9 @@ account    required     pam_succeed_if.so user ingroup %s""" % m.get_admin_group
 
         # On OSTree this happens over ssh
         if m.ostree_image:
-            self.sed_file('s/.*ChallengeResponseAuthentication.*/ChallengeResponseAuthentication yes/', '/etc/ssh/sshd_config',
-                          '( ! systemctl is-active sshd.socket || systemctl stop sshd.socket) && systemctl restart sshd.service')
+            self.restore_dir("/etc/ssh", '( ! systemctl is-active sshd.socket || systemctl stop sshd.socket) && systemctl restart sshd.service')
+            m.execute("sed -i 's/.*ChallengeResponseAuthentication.*/ChallengeResponseAuthentication yes/' /etc/ssh/sshd_config /etc/ssh/sshd_config.d/*")
+            m.execute("( ! systemctl is-active sshd.socket || systemctl stop sshd.socket) && systemctl restart sshd.service")
 
         m.execute("chage -d 0 admin")
         m.start_cockpit()
@@ -341,8 +339,9 @@ account    required     pam_succeed_if.so user ingroup %s""" % m.get_admin_group
         conf = "/etc/pam.d/cockpit"
         if m.ostree_image:
             conf = "/etc/pam.d/sshd"
-            self.sed_file('s/.*ChallengeResponseAuthentication.*/ChallengeResponseAuthentication yes/', '/etc/ssh/sshd_config',
-                          '( ! systemctl is-active sshd.socket || systemctl stop sshd.socket) && systemctl restart sshd.service')
+            self.restore_dir("/etc/ssh", '( ! systemctl is-active sshd.socket || systemctl stop sshd.socket) && systemctl restart sshd.service')
+            m.execute("sed -i 's/.*ChallengeResponseAuthentication.*/ChallengeResponseAuthentication yes/' /etc/ssh/sshd_config /etc/ssh/sshd_config.d/*")
+            m.execute("( ! systemctl is-active sshd.socket || systemctl stop sshd.socket) && systemctl restart sshd.service")
 
         self.sed_file('5 a auth       required    /usr/lib/cockpit-test-assets/mock-pam-conv-mod.so', conf)
 
@@ -445,13 +444,8 @@ account    required     pam_succeed_if.so user ingroup %s""" % m.get_admin_group
         # not an admin
         b.wait_visible(".pf-c-alert:contains('Web console is running in limited access mode.')")
 
-        # with current SELinux policy, user_u and staff_u are not allowed to read cockpit_tmpfs_t memfd: https://bugzilla.redhat.com/show_bug.cgi?id=1814052
-        if m.image in ["fedora-31", "fedora-32", "fedora-testing", "rhel-8-3", "rhel-8-3-distropkg", "centos-8-stream"]:
-            self.allow_journal_messages('Could not query seals on fd .*: not memfd.*')
-            self.assertFalse(b.is_present('#last-login'))
-        else:
-            b.wait_in_text('#last-login', "Last login:")
-            b.wait_in_text('#last-login', "web console")
+        b.wait_in_text('#last-login', "Last login:")
+        b.wait_in_text('#last-login', "web console")
 
         b.logout()
         self.allow_authorize_journal_messages()
@@ -461,7 +455,6 @@ account    required     pam_succeed_if.so user ingroup %s""" % m.get_admin_group
         self.allow_journal_messages(".*/var/lib/cockpit/machines.json.*Permission denied")
         self.allow_journal_messages('.*type=1400.*avc:  denied  { map }.*comm="cockpit-pcp".*')
         self.allow_journal_messages('.*type=1400.*avc:  denied .* comm="sudo".*')
-        self.allow_journal_messages('.*type=1400.*avc:  denied  { write }.*comm="bash".*')
         if m.image in ["centos-8-stream"]:
             # older releases have more noise
             self.allow_journal_messages("sudo: .*setresuid.*: Operation not permitted")
@@ -679,6 +672,133 @@ account    required     pam_succeed_if.so user ingroup %s""" % m.get_admin_group
             expect_successful_login("root", "foobar")
 
         self.allow_restart_journal_messages()
+
+    @skipImage("sssd not available", "fedora-coreos")
+    @skipImage("sssd can't do cert mapping yet", "debian-stable")
+    def testClientCertAuthentication(self):
+        # This only tests the cockpit ←→ sssd API, but this is completely unsafe!
+        # Nothing currently checks whether the client certificate is signed by
+        # a trusted CA, or is in a revocation list. But it is convenient as a downstream
+        # gating test and as a basis to properly supporting certmap rules in the future.
+        m = self.machine
+
+        if m.image.startswith("debian") or m.image.startswith("ubuntu"):
+            # on Debian/Ubuntu, an unconfigured sssd fails to start, so only restart it at the end if it was running before
+            # also, sssd is split into several services
+            self.restore_dir("/etc/sssd", post_restore_action="systemctl stop 'sssd*'")
+        else:
+            self.restore_dir("/etc/sssd", post_restore_action="systemctl try-restart sssd")
+
+        m.execute("useradd alice && echo alice:foobar123 | chpasswd")
+        m.upload(["alice.pem", "alice.key", "alice-expired.pem", "bob.pem", "bob.key"], self.vm_tmpdir,
+                 relative_dir="src/tls/ca/")
+        alice_cert = self.vm_tmpdir + "/alice.pem"
+        alice_cert_expired = self.vm_tmpdir + "/alice-expired.pem"
+        alice_key = self.vm_tmpdir + "/alice.key"
+        alice_cert_key = ['--cert', alice_cert, '--key', alice_key]
+
+        # set up local (NIS) sssd provider and certificate mapping
+        m.write("/etc/sssd/sssd.conf", """
+[sssd]
+domains = local
+
+[domain/local]
+id_provider = files
+
+[certmap/local/alice]
+# WARNING: interface testing only, this is insecure! Nothing validates the cert signer
+matchrule = <SUBJECT>^DC=LAN,DC=COCKPIT,CN=alice$
+""", perm="0600")
+        m.execute("systemctl restart sssd")
+
+        # ensure sssd certificate lookup works
+        user_obj = m.execute('busctl call org.freedesktop.sssd.infopipe /org/freedesktop/sssd/infopipe/Users '
+                             'org.freedesktop.sssd.infopipe.Users FindByCertificate s -- '
+                             '''"$(cat %s)" | sed 's/^o "//; s/"$//' ''' % alice_cert)
+        self.assertEqual(m.execute('busctl get-property org.freedesktop.sssd.infopipe ' + user_obj.strip() +
+                                   ' org.freedesktop.sssd.infopipe.Users.User name').strip(),
+                         's "alice"')
+
+        # These tests have to be run with curl, as chromium-headless does not support selecting/handling client-side
+        # certificates; it just rejects cert requests. For interactive tests, grab src/tls/ca/alice.p12 and import
+        # it into the browser.
+
+        def do_test(authopts, expected, not_expected=[], session_leader=None):
+            m.start_cockpit(tls=True)
+            output = m.execute(['curl', '-ksS', '-D-'] + authopts + ['https://localhost:9090/cockpit/login'])
+            for s in expected:
+                self.assertIn(s, output)
+            for s in not_expected:
+                self.assertNotIn(s, output)
+            # sessions/users often hang around in State=closing for a long time, ignore these
+            if session_leader:
+                m.execute('until [ "$(loginctl show-user --property=State --value alice)" = "active" ]; do sleep 1; done')
+                sessions = m.execute('loginctl show-user --property=Sessions --value alice').strip().split()
+                self.assertGreaterEqual(len(sessions), 1)
+                for session in sessions:
+                    out = m.execute('loginctl session-status ' + session)
+                    if "State: active" in out:  # skip closing sessions
+                        self.assertIn(session_leader, out)
+                        self.assertIn('cockpit-bridge', out)
+                        self.assertIn('cockpit; type web', out)
+                        break
+                else:
+                    self.fail("no active session for active user")
+
+                # sessions time out after 10s, but let's not wait for that
+                m.execute('loginctl terminate-session ' + sessions[0])
+                # wait until the session is gone
+                m.execute("while loginctl show-user alice | grep -q 'State=active'; do sleep 1; done")
+
+            m.stop_cockpit()
+
+        self.allow_journal_messages("alice is not allowed to run sudo.*")
+        self.allow_authorize_journal_messages()
+
+        # cert auth should not be enabled by default
+        do_test(alice_cert_key, ["HTTP/1.1 401 Authentication failed"])
+        # password auth should work
+        do_test(['-u', 'alice:foobar123'],
+                ['HTTP/1.1 200 OK', '"csrf-token"'],
+                session_leader='cockpit-session')
+
+        # enable cert based auth
+        m.write("/etc/cockpit/cockpit.conf", '[WebService]\nClientCertAuthentication = true\n', append=True)
+        # cert auth should work now
+        do_test(alice_cert_key, ['HTTP/1.1 200 OK', '"csrf-token"'])
+        # password auth, too
+        do_test(['-u', 'alice:foobar123'],
+                ['HTTP/1.1 200 OK', '"csrf-token"'],
+                session_leader='cockpit-session')
+
+        # another certificate gets rejected
+        do_test(["--cert", self.vm_tmpdir + "/bob.pem", "--key", self.vm_tmpdir + "/bob.key"],
+                ["HTTP/1.1 401 Authentication failed", '<h1>Authentication failed</h1>'],
+                not_expected=["crsf-token"])
+
+        # check expired certificate
+        m.start_cockpit(tls=True)
+        journal_cursor = self.machine.journal_cursor()
+        m.execute('! curl -ksS --cert %s --key %s https://localhost:9090/cockpit/login' % (alice_cert_expired, alice_key))
+        m.stop_cockpit()
+        wait(lambda: re.search(r'.*Invalid TLS peer certificate.* expired',
+                m.execute("journalctl -ocat --cursor '%s' SYSLOG_IDENTIFIER=cockpit-tls" % journal_cursor)),
+            tries=10)
+        self.allow_journal_messages('.*Invalid TLS peer certificate.* expired')
+        self.allow_journal_messages('.*TLS handshake failed: Error in the certificate verification.*')
+
+        # disallow password auth
+        m.write("/etc/cockpit/cockpit.conf", "[Basic]\naction = none\n", append=True)
+        do_test(alice_cert_key, ['HTTP/1.1 200 OK', '"csrf-token"'])
+        do_test(['-u', 'alice:foobar123'],
+                ['HTTP/1.1 401 Authentication disabled', '<h1>Authentication disabled</h1>'],
+                not_expected=["crsf-token"])
+
+        # sssd-dbus not available
+        m.execute("systemctl mask sssd-ifp && systemctl stop sssd-ifp")
+        do_test(alice_cert_key, ["HTTP/1.1 401 Authentication failed", '<h1>Authentication failed</h1>'],
+                not_expected=["crsf-token"])
+        m.execute("systemctl unmask sssd-ifp")
 
 
 if __name__ == '__main__':

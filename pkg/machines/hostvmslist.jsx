@@ -41,6 +41,8 @@ import { ListingTable } from "cockpit-components-table.jsx";
 import { VmExpandedContent } from './components/vm/vmExpandedContent.jsx';
 import StateIcon from './components/vm/stateIcon.jsx';
 
+import "./hostvmslist.scss";
+
 const VmState = ({ vm, resourceHasError }) => {
     let state = null;
 
@@ -92,10 +94,10 @@ class HostVmsList extends React.Component {
                 emptyCaption={_("No VM is running or defined on this host")}
                 actions={actions}
                 columns={[
-                    { title: _("Name") },
+                    { title: _("Name"), header: true },
                     { title: _("Connection") },
                     { title: _("State") },
-                    { title: _("Actions") },
+                    { title: "" },
                 ]}
                 rows={ combinedVms
                         .sort(sortFunction)

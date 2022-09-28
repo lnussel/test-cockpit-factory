@@ -17,7 +17,6 @@
  * along with Cockpit; If not, see <http://www.gnu.org/licenses/>.
  */
 
-import cockpit from "cockpit";
 import PropTypes from 'prop-types';
 import React from 'react';
 import {
@@ -32,7 +31,6 @@ import {
 } from '@patternfly/react-table';
 
 import './cockpit-components-table.scss';
-import './listing.scss';
 
 /* This is a wrapper around PF Table component
  * See https://www.patternfly.org/v4/documentation/react/components/table
@@ -171,7 +169,8 @@ export class ListingTable extends React.Component {
                     parent: rowIndex - 1,
                     cells: [{ title: currentValue.expandedContent }],
                     fullWidth: true, noPadding: true,
-                    rowId: currentValue.rowId ? cockpit.format("$0-expanded", currentValue.rowId) : undefined
+                    rowId: currentValue.rowId ? (currentValue.rowId + "-expanded") : undefined,
+                    props: { key: currentValue.props.key + "-expanded" },
                 });
                 rowIndex++;
             }

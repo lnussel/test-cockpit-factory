@@ -27,6 +27,7 @@ import VmNetworkTab from '../vmnetworktab.jsx';
 import Consoles from '../consoles.jsx';
 import VmOverviewTab from '../vmOverviewTabLibvirt.jsx';
 import VmUsageTab from './vmUsageTab.jsx';
+import VmSnapshotsTab from '../vmSnapshotsTab.jsx';
 import { ListingPanel } from 'cockpit-components-listing-panel.jsx';
 
 const _ = cockpit.gettext;
@@ -35,32 +36,32 @@ const _ = cockpit.gettext;
  */
 export const VmExpandedContent = ({
     vm, vms, config, libvirtVersion, hostDevices, storagePools,
-    onUsageStartPolling, onUsageStopPolling, dispatch, networks, interfaces, nodeDevices, resourceHasError, onAddErrorNotification
+    onUsageStartPolling, onUsageStopPolling, dispatch, networks,
+    interfaces, nodeDevices, onAddErrorNotification
 }) => {
-    const overviewTabName = (<a href="#" id={`${vmId(vm.name)}-overview`}>{_("Overview")}</a>);
-    const usageTabName = (<a href="#" id={`${vmId(vm.name)}-usage`}>{_("Usage")}</a>);
-    const disksTabName = (<a href="#" id={`${vmId(vm.name)}-disks`}>{_("Disks")}</a>);
-    const networkTabName = (<a href="#" id={`${vmId(vm.name)}-networks`}>{_("Network Interfaces")}</a>);
-    const consolesTabName = (<a href="#" id={`${vmId(vm.name)}-consoles`}>{_("Consoles")}</a>);
-
     const tabRenderers = [
-        { name: overviewTabName, id: cockpit.format("$0-overview", vmId(vm.name)), renderer: VmOverviewTab, data: { vm, config, dispatch, nodeDevices, libvirtVersion } },
-        { name: usageTabName, id: cockpit.format("$0-usage", vmId(vm.name)), renderer: VmUsageTab, data: { vm, onUsageStartPolling, onUsageStopPolling }, presence: 'onlyActive' },
-        { name: disksTabName, id: cockpit.format("$0-disks", vmId(vm.name)), renderer: VmDisksTab, data: { vm, vms, config, storagePools, onUsageStartPolling, onUsageStopPolling, dispatch, onAddErrorNotification }, presence: 'onlyActive' },
-        { name: networkTabName, id: cockpit.format("$0-networks", vmId(vm.name)), renderer: VmNetworkTab, presence: 'onlyActive', data: { vm, dispatch, config, hostDevices, interfaces, networks, nodeDevices, onAddErrorNotification } },
-        { name: consolesTabName, id: cockpit.format("$0-consoles", vmId(vm.name)), renderer: Consoles, data: { vm, config, dispatch, onAddErrorNotification } },
+        { name: _("Overview"), id: cockpit.format("$0-overview", vmId(vm.name)), renderer: VmOverviewTab, data: { vm, config, dispatch, nodeDevices, libvirtVersion } },
+        { name: _("Usage"), id: cockpit.format("$0-usage", vmId(vm.name)), renderer: VmUsageTab, data: { vm, onUsageStartPolling, onUsageStopPolling }, presence: 'onlyActive' },
+        { name: _("Disks"), id: cockpit.format("$0-disks", vmId(vm.name)), renderer: VmDisksTab, data: { vm, vms, config, storagePools, onUsageStartPolling, onUsageStopPolling, dispatch, onAddErrorNotification }, presence: 'onlyActive' },
+        { name: _("Network Interfaces"), id: cockpit.format("$0-networks", vmId(vm.name)), renderer: VmNetworkTab, presence: 'onlyActive', data: { vm, dispatch, config, hostDevices, interfaces, networks, nodeDevices, onAddErrorNotification } },
+        { name: _("Consoles"), id: cockpit.format("$0-consoles", vmId(vm.name)), renderer: Consoles, data: { vm, config, dispatch, onAddErrorNotification } },
     ];
+    if (vm.snapshots !== -1)
+        tabRenderers.splice(4, 0, { name: _("Snapshots"), id: cockpit.format("$0-snapshots", vmId(vm.name)), renderer: VmSnapshotsTab, data: { vm, dispatch, config, onAddErrorNotification } });
 
     let initiallyActiveTab = null;
-    if (vm.ui.initiallyOpenedConsoleTab) {
-        initiallyActiveTab = tabRenderers.map((o) => o.name).indexOf(consolesTabName);
+    if (vm.ui && vm.ui.initiallyOpenedConsoleTab) {
+        initiallyActiveTab = tabRenderers.map((o) => o.name).indexOf(_("Consoles"));
     }
 
-    return (<ListingPanel
-        colSpan='4'
-        initiallyActiveTab={initiallyActiveTab}
-        tabRenderers={tabRenderers} />);
+    return (vm.snapshots !== undefined
+        ? <ListingPanel
+            colSpan='4'
+            initiallyActiveTab={initiallyActiveTab}
+            tabRenderers={tabRenderers} />
+        : null);
 };
+
 VmExpandedContent.propTypes = {
     vm: PropTypes.object.isRequired,
     vms: PropTypes.array.isRequired,

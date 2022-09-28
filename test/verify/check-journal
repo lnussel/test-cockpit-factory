@@ -21,13 +21,21 @@ import parent
 from testlib import *
 import time
 
+sleep_crash_list_sel = "#journal-box .cockpit-logline .cockpit-log-message:contains('(sleep) crashed in')"
+
 
 class TestJournal(MachineCase):
     def setUp(self):
         super().setUp()
 
-        self.restore_dir("/var/log/journal", post_restore_action="systemctl try-restart systemd-journald")
-        self.machine.execute("systemctl try-restart systemd-journald")
+        if self.is_nondestructive():
+            # we need persistent journal for the rebooting tests
+            self.restore_dir("/run/log/journal", post_restore_action="systemctl try-restart systemd-journald")
+            self.restore_dir("/var/log/journal", post_restore_action="systemctl try-restart systemd-journald")
+            self.machine.execute("systemctl stop systemd-journald")
+            self.machine.execute("rm -rf /run/log/journal/* /var/log/journal/*")
+            self.machine.execute("systemctl start systemd-journald")
+            self.allow_journal_messages("Specifying boot ID or boot offset has no effect, no persistent journal was found.*")
 
     def injectExtras(self):
         self.browser.inject_js("""
@@ -214,12 +222,10 @@ ExecStart=/bin/sh -c 'for s in $(seq 10); do echo SLOW; sleep 0.1; done; sleep 1
                                ["systemd", "Started Slowly log 10 identical lines.", ""]])
 
         def wait_log_present(message):
-            sel = "#journal-box .cockpit-logline .cockpit-log-message:contains('%s')" % message
-            b.wait_visible(sel)
+            b.wait_visible("#journal-box .cockpit-logline .cockpit-log-message:contains('%s')" % message)
 
         def wait_log_not_present(message):
-            sel = "#journal-box .cockpit-logline .cockpit-log-message:contains('%s')" % message
-            b.wait_not_present(sel)
+            b.wait_not_present("#journal-box .cockpit-logline .cockpit-log-message:contains('%s')" % message)
 
         m.execute("systemctl start slow10")
 
@@ -322,26 +328,24 @@ ExecStart=/bin/sh -c 'for s in $(seq 10); do echo SLOW; sleep 0.1; done; sleep 1
         b.wait_present("#journal-box .cockpit-logline .cockpit-log-message:contains('Message 6')")
         b.wait_present("#journal-box .cockpit-logline .cockpit-log-message:contains('Message 5')")
 
-        if m.image == "rhel-8-3-distropkg": # Introduced in #14262
-            b.go("#/?tag=logger&start=last-24h&prio=crit&grep=foo")
-            b.wait_val("#journal-grep", "start:last-24h priority:crit identifier:logger foo")
-        else:
-            # Test filters
-            b.click("#log-filters")
-            b.click("#logs-predefined-filters li:first-child a")
-            b.wait_val("#journal-grep", "priority:err identifier:logger boot:0 [5-6]")
+        # Test filters
+        b.click("#log-filters")
+        b.click("#logs-predefined-filters li:first-child a")
+        b.wait_val("#journal-grep", "priority:err identifier:logger boot:0 [5-6]")
 
-            b.click("#log-filters")
-            b.click("#logs-predefined-filters li:nth-child(2) a")
-            b.wait_val("#journal-grep", "priority:err identifier:logger boot:-1 [5-6]")
+        b.click("#log-filters")
+        b.click("#logs-predefined-filters li:nth-child(2) a")
+        b.wait_val("#journal-grep", "priority:err identifier:logger boot:-1 [5-6]")
 
-            b.click("#log-filters")
-            b.click("#logs-predefined-filters li:nth-child(3) a")
-            b.wait_val("#journal-grep", "priority:err identifier:logger since:-24hours [5-6]")
+        b.click("#log-filters")
+        b.click("#logs-predefined-filters li:nth-child(3) a")
+        b.wait_val("#journal-grep", "priority:err identifier:logger since:-24hours [5-6]")
 
-            b.click("#log-filters")
-            b.click("#logs-predefined-filters li:nth-child(4) a")
-            b.wait_val("#journal-grep", "priority:err identifier:logger since:-7days [5-6]")
+        b.click("#log-filters")
+        b.click("#logs-predefined-filters li:nth-child(4) a")
+        b.wait_val("#journal-grep", "priority:err identifier:logger since:-7days [5-6]")
+
+        self.allow_journal_messages("Data from the specified boot .* is not available: No such boot ID in journal")
 
     def testRebootAndTime(self):
         b = self.browser
@@ -430,10 +434,7 @@ ExecStart=/bin/sh -c 'for s in $(seq 10); do echo SLOW; sleep 0.1; done; sleep 1
                         ["check-journal", "BEFORE BOOT", ""]
                         ])
 
-        if m.image == "rhel-8-3-distropkg": # Changed in #14262
-            b.go("#/?start=boot&tag=check-journal")
-        else:
-            b.go("#/?boot=0&tag=check-journal")
+        b.go("#/?boot=0&tag=check-journal")
         wait_log_lines([expected_date,
                         ["check-journal", "AFTER BOOT", ""],
                         "Load earlier entries",
@@ -448,19 +449,13 @@ ExecStart=/bin/sh -c 'for s in $(seq 10); do echo SLOW; sleep 0.1; done; sleep 1
                         ])
 
         # Check selecting of services
-        if m.image == "rhel-8-3-distropkg": # Changed in #14262
-            b.go("#/?start=previous-boot&tag=check-journal")
-        else:
-            b.go("#/?boot=-1&tag=check-journal")
+        b.go("#/?boot=-1&tag=check-journal")
         wait_log_lines([expected_date,
                         ["check-journal", "BEFORE BOOT", ""],
                         "Load earlier entries"
                         ])
 
-        if m.image == "rhel-8-3-distropkg": # Changed in #14262
-            b.go("#/?start=boot&tag=check-journal")
-        else:
-            b.go("#/?boot=0&tag=check-journal")
+        b.go("#/?boot=0&tag=check-journal")
         wait_log_lines([expected_date,
                         ["check-journal", "AFTER BOOT", ""],
                         "Load earlier entries"
@@ -474,10 +469,7 @@ ExecStart=/bin/sh -c 'for s in $(seq 10); do echo SLOW; sleep 0.1; done; sleep 1
 
         m.execute(r"printf 'MESSAGE=Hello \01 World\nPRIORITY=3\nFOO=bar\nBIN=a\01b\02c\03\n' | logger --journald")
         self.login_and_go("/system/logs#/?tag=logger")
-
-        sel = "#journal-box .cockpit-logline .cockpit-log-message:contains('[13 bytes of binary data]')"
-        b.click(sel)
-
+        b.click("#journal-box .cockpit-logline .cockpit-log-message:contains('[13 bytes of binary data]')")
         b.wait_text("#journal-entry-message", "[13 bytes of binary data]")
 
         def wait_field(name, value):
@@ -494,10 +486,7 @@ ExecStart=/bin/sh -c 'for s in $(seq 10); do echo SLOW; sleep 0.1; done; sleep 1
 
         m.execute(r"printf 'PRIORITY=3\nFOO=bar\n' | logger --journald")
         self.login_and_go("/system/logs#/?tag=logger")
-
-        sel = "#journal-box .cockpit-logline .cockpit-log-message:contains('[no data]')"
-        b.click(sel)
-
+        b.click("#journal-box .cockpit-logline .cockpit-log-message:contains('[no data]')")
         b.wait_text("#journal-entry-message", "[no data]")
 
     @nondestructive
@@ -544,16 +533,14 @@ ExecStart=/bin/sh -c 'for s in $(seq 10); do echo SLOW; sleep 0.1; done; sleep 1
 
         self.login_and_go("/system/logs")
 
-        sel = "#journal-box .cockpit-logline .cockpit-log-message:contains('(sleep) crashed in')"
-
         self.select_priority("Critical and above")
-        b.wait_visible(sel)
+        b.wait_visible(sleep_crash_list_sel)
 
         self.select_priority("Alert and above")
-        b.wait_not_present(sel)
+        b.wait_not_present(sleep_crash_list_sel)
 
         self.select_priority("Critical and above")
-        b.click(sel)
+        b.click(sleep_crash_list_sel)
 
         def wait_field(name, value):
             row_sel = "#journal-entry-fields tr:contains('" + name + "')"
@@ -564,13 +551,8 @@ ExecStart=/bin/sh -c 'for s in $(seq 10); do echo SLOW; sleep 0.1; done; sleep 1
         b.click("li:contains(Problem info)")
         wait_field("reason", "killed by SIGSEGV")
         b.click("li:contains(Problem details)")
-        sel = "#journal-entry-fields #accordion-markup .panel .panel-heading"
-        sel += " .panel-title .accordion-toggle:contains('core_backtrace')"
-        b.click(sel)
-
-        sel = "#journal-entry #accordion-markup .panel .panel-collapse"
-        sel += " .panel-body:contains('signal: 11  executable: ')"
-        b.wait_present(sel)
+        b.click("#journal-entry-fields #accordion-markup .accordion-toggle:contains('core_backtrace')")
+        b.wait_present("#journal-entry #accordion-markup .panel-body:contains('signal: 11  executable: ')")
 
     @skipImage("ABRT not available", "debian-stable", "debian-testing", "ubuntu-stable",
                "ubuntu-2004", "fedora-coreos", "rhel-8-3", "rhel-8-3-distropkg", "centos-8-stream")
@@ -592,18 +574,12 @@ ExecStart=/bin/sh -c 'for s in $(seq 10); do echo SLOW; sleep 0.1; done; sleep 1
         self.crash()
 
         self.login_and_go("/system/logs")
-
-        sel = "#journal-box .cockpit-logline .cockpit-log-message:contains('(sleep) crashed in')"
-        b.click(sel)
+        b.click(sleep_crash_list_sel)
 
         b.wait_in_text("#journal-entry-heading", "sleep")
-        sel = "#journal-entry-fields .nav .pf-m-danger"
-        b.click(sel)
-
+        b.click("#journal-entry-fields .nav .pf-m-danger")
         b.wait_in_text('#journal-box', "(sleep) crashed in")
-
-        sel = "#journal-box .cockpit-logline .cockpit-log-message:contains('(sleep) crashed in')"
-        b.click(sel)
+        b.click(sleep_crash_list_sel)
 
         b.wait_in_text("#journal-entry-heading", "sleep")
         # details view should hide log view
@@ -648,15 +624,9 @@ ExecStart=/bin/sh -c 'for s in $(seq 10); do echo SLOW; sleep 0.1; done; sleep 1
         self.crash()
 
         self.login_and_go("/system/logs")
-
-        sel = "#journal-box .cockpit-logline .cockpit-log-message:contains('(sleep) crashed in')"
-        b.click(sel)
-
-        sel = "table.reporting-table tr:first-child button:contains('Report')"
-        b.click(sel)
-
-        sel = "table.reporting-table tr:first-child a[href$='/reports/bthash/123deadbeef'"
-        b.wait_present(sel)
+        b.click(sleep_crash_list_sel)
+        b.click("table.reporting-table tr:first-child button:contains('Report')")
+        b.wait_present("table.reporting-table tr:first-child a[href$='/reports/bthash/123deadbeef'")
 
         # "Unreport" the problem to test reporting unknown problem
         m.execute('find /var/spool/abrt -name "reported_to" -or -name "ureports_counter" | xargs rm')
@@ -669,28 +639,18 @@ ExecStart=/bin/sh -c 'for s in $(seq 10); do echo SLOW; sleep 0.1; done; sleep 1
         b.reload()
         b.enter_page("/system/logs")
 
-        sel = "table.reporting-table tr:contains('Report to Cockpit') button:contains('Report')"
-        b.click(sel)
+        b.click("table.reporting-table tr:contains('Report to Cockpit') button:contains('Report')")
 
         test_user = 'correcthorsebatterystaple'
 
         for purpose in ['text', 'password']:
             b.wait_visible(".modal-content input[type='%s']" % (purpose))
+            b.set_val(".modal-content input", test_user)
+            b.click(".modal-footer button:contains('Send')")
 
-            sel = ".modal-content input"
-            b.set_val(sel, test_user)
-
-            sel = ".modal-footer button:contains('Send')"
-            b.click(sel)
-
-        sel = ".modal-content p:contains('Password')"
-        b.wait_not_present(sel)
-
-        sel = ".modal-footer button:contains('No')"
-        b.click(sel)
-
-        sel = "table.reporting-table tr:contains('Report to Cockpit') a[href='https://bugzilla.example.com/show_bug.cgi?id=123456']"
-        b.wait_present(sel)
+        b.wait_not_present(".modal-content p:contains('Password')")
+        b.click(".modal-footer button:contains('No')")
+        b.wait_present("table.reporting-table tr:contains('Report to Cockpit') a[href='https://bugzilla.example.com/show_bug.cgi?id=123456']")
 
     @skipImage("ABRT not available", "debian-stable", "debian-testing", "ubuntu-stable",
                "ubuntu-2004", "fedora-coreos", "rhel-8-3", "rhel-8-3-distropkg", "centos-8-stream")
@@ -722,20 +682,11 @@ ExecStart=/bin/sh -c 'for s in $(seq 10); do echo SLOW; sleep 0.1; done; sleep 1
 
         self.login_and_go("/system/logs")
 
-        sel = "#journal-box .cockpit-logline .cockpit-log-message:contains('(sleep) crashed in')"
-        b.click(sel)
-
-        sel = "table.reporting-table tr:contains('Report to Cockpit') button:contains('Report')"
-        b.click(sel)
-
-        sel = "table.reporting-table tr:contains('Report to Cockpit') td:contains('Cancel me')"
-        b.wait_visible(sel)
-
-        sel = "table.reporting-table tr:contains('Report to Cockpit') button:contains('Cancel')"
-        b.click(sel)
-
-        sel = "table.reporting-table tr:contains('Report to Cockpit') td:contains('Reporting was canceled')"
-        b.wait_present(sel)
+        b.click(sleep_crash_list_sel)
+        b.click("table.reporting-table tr:contains('Report to Cockpit') button:contains('Report')")
+        b.wait_visible("table.reporting-table tr:contains('Report to Cockpit') td:contains('Cancel me')")
+        b.click("table.reporting-table tr:contains('Report to Cockpit') button:contains('Cancel')")
+        b.wait_present("table.reporting-table tr:contains('Report to Cockpit') td:contains('Reporting was canceled')")
 
     @skipImage("ABRT not available", "debian-stable", "debian-testing", "ubuntu-stable",
                "ubuntu-2004", "fedora-coreos", "rhel-8-3", "rhel-8-3-distropkg", "centos-8-stream")
@@ -763,15 +714,9 @@ ExecStart=/bin/sh -c 'for s in $(seq 10); do echo SLOW; sleep 0.1; done; sleep 1
         self.crash()
 
         self.login_and_go("/system/logs")
-
-        sel = "#journal-box .cockpit-logline .cockpit-log-message:contains('(sleep) crashed in')"
-        b.click(sel)
-
-        sel = "table.reporting-table tr:first-child button:contains('Report')"
-        b.click(sel)
-
-        sel = "table.reporting-table tr:first-child a[href$='/reports/bthash/123deadbeef'"
-        b.wait_present(sel)
+        b.click(sleep_crash_list_sel)
+        b.click("table.reporting-table tr:first-child button:contains('Report')")
+        b.wait_present("table.reporting-table tr:first-child a[href$='/reports/bthash/123deadbeef'")
 
 if __name__ == '__main__':
     test_main()

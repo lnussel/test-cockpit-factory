@@ -238,6 +238,15 @@ function MachinesIndex(index_options, machines, loader, mdialogs) {
             document.getElementById("main").style.removeProperty('--ct-color-host-accent');
         }
 
+        let component_manifest = state.component;
+        // If `state.component` is not known to any manifest, find where it comes from
+        if (compiled.items[state.component] == undefined) {
+            let s = state.component;
+            while (s && compiled.items[s] == undefined)
+                s = s.substring(0, s.lastIndexOf("/"));
+            component_manifest = s;
+        }
+
         // Filtering of navigation by term
         function keyword_filter(item, term) {
             function keyword_relevance(current_best, item) {
@@ -286,7 +295,7 @@ function MachinesIndex(index_options, machines, loader, mdialogs) {
 
         // Rendering of separate navigation menu items
         function nav_item(component, term) {
-            const active = state.component === component.path;
+            const active = component_manifest === component.path;
 
             // Parse path
             let path = component.path;
@@ -407,10 +416,15 @@ function MachinesIndex(index_options, machines, loader, mdialogs) {
     }
 
     function update_superuser(machine, state, compiled) {
-        ReactDOM.render(React.createElement(SuperuserIndicator, { host: machine.connection_string }),
-                        document.getElementById('super-user-indicator'));
-        ReactDOM.render(React.createElement(SuperuserIndicator, { host: machine.connection_string }),
-                        document.getElementById('super-user-indicator-mobile'));
+        if (machine.state == "connected") {
+            ReactDOM.render(React.createElement(SuperuserIndicator, { host: machine.connection_string }),
+                            document.getElementById('super-user-indicator'));
+            ReactDOM.render(React.createElement(SuperuserIndicator, { host: machine.connection_string }),
+                            document.getElementById('super-user-indicator-mobile'));
+        } else {
+            ReactDOM.unmountComponentAtNode(document.getElementById('super-user-indicator'));
+            ReactDOM.unmountComponentAtNode(document.getElementById('super-user-indicator-mobile'));
+        }
     }
 
     function update_title(label, machine) {

@@ -186,7 +186,7 @@ class AvocadoTestSuite:
     def _run_one_avocado_test(self, test):
         status = True
         start_time = datetime.datetime.now()
-        # wrap command to timeout to see also partial run result, to see whats happen
+        # wrap command to timeout to see also partial run result, to see what happens
         # instead of empty output and just timeout
         self.avocado_command = ["timeout {}".format(self.timeout - round(self.timeout/100)),
                      self.base_cmd, "run",
@@ -254,7 +254,6 @@ class SeleniumTestSuite(AvocadoTestSuite):
 
     def _cockpit_prepare(self):
         super()._cockpit_prepare()
-        self._prepare_kdump_test()
         self._prepare_machines_test_env()
 
     def cleanup(self):
@@ -270,15 +269,6 @@ class SeleniumTestSuite(AvocadoTestSuite):
     """ % (host, port)
         with testvm.Timeout(seconds=300, error_message="Timeout while waiting for selenium to start"):
             self.machine_avocado.execute(script=WAIT_SELENIUM_RUNNING)
-
-    def _prepare_kdump_test(self):
-        # enable kernel kdump support
-        self.machine_cockpit.execute("rpm -q nfs-utils || yum install -y nfs-utils", timeout=500)
-        self.machine_cockpit.execute("grubby --update-kernel DEFAULT --args='crashkernel=128M'")
-        self.machine_cockpit.execute("reboot")
-        self.machine_cockpit.wait_reboot()
-        self.machine_cockpit.execute("systemctl start kdump")
-        self.machine_cockpit.execute("systemctl enable kdump")
 
     def _prepare_machines_test_env(self):
         # Ensure everything has started correctly
@@ -359,7 +349,7 @@ class SeleniumOwnHub(SeleniumTestSuite):
         self.env["HUB"] = hub_address
         self.env["GUEST"] = guest_adress
         self.env["PORT"] = cockpit_port
-        # avocado and cockpit machine is in same network so use internal adress
+        # avocado and cockpit machine is in same network so use internal address
         self.env["SSH_PORT"] = "22"
         self.env["SSH_GUEST"] = self.ipaddr_cockpit
         self.env["BROWSER"] = browser
@@ -383,7 +373,7 @@ def main():
                         dest="hub",
                         action="store",
                         help="Use own Selenium hub (it is important to ensure that hub can see cockpit machine)"
-                             " You can use adress formats:"
+                             " You can use address formats:"
                              " yourHubIP"
                              " or yourHubIP:CockpitIP"
                              " or yourHubIP:CockpitIP:CockpitPort"

@@ -87,7 +87,7 @@ export function createTempFile(content) {
 }
 
 export function getDiskElemByTarget(domxml, targetOriginal) {
-    const domainElem = getDomainElem(domxml);
+    const domainElem = getElem(domxml);
 
     if (!domainElem) {
         console.warn(`Can't parse dumpxml, input: "${domainElem}"`);
@@ -109,20 +109,8 @@ export function getDiskElemByTarget(domxml, targetOriginal) {
     }
 }
 
-export function getDomainElem(domXml) {
-    const parser = new DOMParser();
-    const xmlDoc = parser.parseFromString(domXml, "application/xml");
-
-    if (!xmlDoc) {
-        console.warn(`Can't parse dumpxml, input: "${domXml}"`);
-        return;
-    }
-
-    return xmlDoc.getElementsByTagName("domain")[0];
-}
-
 export function getIfaceElemByMac(domxml, mac) {
-    const domainElem = getDomainElem(domxml);
+    const domainElem = getElem(domxml);
 
     if (!domainElem) {
         console.warn(`Can't parse dumpxml, input: "${domainElem}"`);
@@ -144,62 +132,16 @@ export function getIfaceElemByMac(domxml, mac) {
     }
 }
 
-function getIfaceElem(netXml) {
+export function getElem(xml) {
     const parser = new DOMParser();
-    const xmlDoc = parser.parseFromString(netXml, "application/xml");
+    const xmlDoc = parser.parseFromString(xml, "application/xml");
 
     if (!xmlDoc) {
-        console.warn(`Can't parse dumpxml, input: "${netXml}"`);
+        console.warn(`Can't parse dumpxml, input: "${xml}"`);
         return;
     }
 
-    return xmlDoc.getElementsByTagName("interface")[0];
-}
-
-function getNetworkElem(netXml) {
-    const parser = new DOMParser();
-    const xmlDoc = parser.parseFromString(netXml, "application/xml");
-
-    if (!xmlDoc) {
-        console.warn(`Can't parse dumpxml, input: "${netXml}"`);
-        return;
-    }
-
-    return xmlDoc.getElementsByTagName("network")[0];
-}
-
-function getNodeDeviceElem(deviceXml) {
-    const parser = new DOMParser();
-    const xmlDoc = parser.parseFromString(deviceXml, "application/xml");
-
-    if (!xmlDoc) {
-        console.warn(`Can't parse dumpxml, input: "${deviceXml}"`);
-        return;
-    }
-
-    return xmlDoc.getElementsByTagName("device")[0];
-}
-
-function getStoragePoolElem(poolXml) {
-    const parser = new DOMParser();
-    const xmlDoc = parser.parseFromString(poolXml, "application/xml");
-
-    if (!xmlDoc) {
-        console.warn(`Can't parse dumpxml, input: "${poolXml}"`);
-        return;
-    }
-
-    return xmlDoc.getElementsByTagName("pool")[0];
-}
-
-function getStorageVolumeElem(poolXml) {
-    const parser = new DOMParser();
-    const xmlDoc = parser.parseFromString(poolXml, 'application/xml');
-    if (!xmlDoc) {
-        console.warn(`Can't parse dumpxml, input: "${poolXml}"`);
-        return;
-    }
-    return xmlDoc.getElementsByTagName('volume')[0];
+    return xmlDoc.firstElementChild;
 }
 
 export function getSingleOptionalElem(parent, name) {
@@ -207,8 +149,24 @@ export function getSingleOptionalElem(parent, name) {
     return subElems.length > 0 ? subElems[0] : undefined; // optional
 }
 
+export function parseDomainSnapshotDumpxml(snapshot) {
+    const snapElem = getElem(snapshot);
+
+    const nameElem = getSingleOptionalElem(snapElem, 'name');
+    const descElem = getSingleOptionalElem(snapElem, 'description');
+    const parentElem = getSingleOptionalElem(snapElem, 'parent');
+
+    const name = nameElem ? nameElem.childNodes[0].nodeValue : undefined;
+    const description = descElem ? descElem.childNodes[0].nodeValue : undefined;
+    const parentName = parentElem ? parentElem.getElementsByTagName("name")[0].childNodes[0].nodeValue : undefined;
+    const state = snapElem.getElementsByTagName("state")[0].childNodes[0].nodeValue;
+    const creationTime = snapElem.getElementsByTagName("creationTime")[0].childNodes[0].nodeValue;
+
+    return { name, description, state, creationTime, parentName };
+}
+
 export function parseDumpxml(dispatch, connectionName, domXml, id_overwrite) {
-    const domainElem = getDomainElem(domXml);
+    const domainElem = getElem(domXml);
     if (!domainElem) {
         return;
     }
@@ -668,7 +626,7 @@ export function parseDumpxmlMachinesMetadataElement(metadataElem, name) {
 
 export function parseIfaceDumpxml(ifaceXml) {
     const retObj = {};
-    const ifaceElem = getIfaceElem(ifaceXml);
+    const ifaceElem = getElem(ifaceXml);
 
     retObj.type = ifaceElem.getAttribute("type");
 
@@ -677,7 +635,7 @@ export function parseIfaceDumpxml(ifaceXml) {
 
 export function parseNetDumpxml(netXml) {
     const retObj = {};
-    const netElem = getNetworkElem(netXml);
+    const netElem = getElem(netXml);
     if (!netElem) {
         return;
     }
@@ -764,7 +722,7 @@ function parseNetDumpxmlForIp(ipElems) {
 }
 
 export function parseNodeDeviceDumpxml(nodeDevice) {
-    const deviceElem = getNodeDeviceElem(nodeDevice);
+    const deviceElem = getElem(nodeDevice);
     if (!deviceElem) {
         return;
     }
@@ -824,7 +782,7 @@ export function parseOsInfoList(dispatch, osList) {
 }
 
 export function parseStoragePoolDumpxml(connectionName, storagePoolXml, id_overwrite) {
-    const storagePoolElem = getStoragePoolElem(storagePoolXml);
+    const storagePoolElem = getElem(storagePoolXml);
     if (!storagePoolElem) {
         return;
     }
@@ -871,7 +829,7 @@ export function parseStoragePoolDumpxml(connectionName, storagePoolXml, id_overw
 }
 
 export function parseStorageVolumeDumpxml(connectionName, storageVolumeXml, id_overwrite) {
-    const storageVolumeElem = getStorageVolumeElem(storageVolumeXml);
+    const storageVolumeElem = getElem(storageVolumeXml);
     if (!storageVolumeElem) {
         return;
     }
@@ -923,7 +881,7 @@ export function resolveUiState(dispatch, name, connectionName) {
 }
 
 export function updateDisk({ domXml, diskTarget, readonly, shareable, busType, existingTargets }) {
-    const domainElem = getDomainElem(domXml);
+    const domainElem = getElem(domXml);
     if (!domainElem)
         throw new Error("updateBootOrder: domXML has no domain element");
 
@@ -985,7 +943,7 @@ export function unknownConnectionName(action, libvirtServiceName) {
 }
 
 export function updateBootOrder(domXml, devices) {
-    const domainElem = getDomainElem(domXml);
+    const domainElem = getElem(domXml);
     if (!domainElem)
         throw new Error("updateBootOrder: domXML has no domain element");
 
@@ -1183,7 +1141,7 @@ export function updateBootOrder(domXml, devices) {
  * This function is used to define only offline attribute of memory.
  */
 export function updateMaxMemory(domXml, maxMemory) {
-    const domainElem = getDomainElem(domXml);
+    const domainElem = getElem(domXml);
 
     const memElem = domainElem.getElementsByTagName("memory")[0];
     memElem.textContent = `${maxMemory}`;
@@ -1195,7 +1153,7 @@ export function updateMaxMemory(domXml, maxMemory) {
 }
 
 export function updateVCPUSettings(domXml, count, max, sockets, cores, threads) {
-    const domainElem = getDomainElem(domXml);
+    const domainElem = getElem(domXml);
     if (!domainElem)
         throw new Error("updateVCPUSettings: domXML has no domain element");
 

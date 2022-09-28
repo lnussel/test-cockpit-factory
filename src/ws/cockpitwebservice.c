@@ -632,7 +632,7 @@ process_transport_init (CockpitWebService *self,
       json_object_set_int_member (object, "version", 1);
       json_object_set_string_member (object, "host", "localhost");
 
-      superuser = cockpit_creds_get_superuser (self->creds);
+      superuser = getenv("COCKPIT_SUPERUSER") ?: cockpit_creds_get_superuser (self->creds);
       if (superuser && *superuser && !g_str_equal (superuser, "none"))
         {
           JsonObject *superuser_options;
@@ -1129,7 +1129,6 @@ on_web_socket_open (WebSocketConnection *connection,
 
   info = json_object_new ();
   json_object_set_string_member (info, "version", PACKAGE_VERSION);
-  json_object_set_string_member (info, "build", COCKPIT_BUILD_INFO);
   json_object_set_object_member (object, "system", info);
 
   command = cockpit_json_write_bytes (object);

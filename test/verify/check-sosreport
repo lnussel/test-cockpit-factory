@@ -82,6 +82,23 @@ threads=1
     def testWithUrlRoot(self):
         self.testBasic(urlroot="/webcon")
 
+    def testCancel(self):
+        m = self.machine
+        b = self.browser
+
+        m.execute("rm -rf /var/tmp/sos*")
+
+        self.login_and_go("/sosreport")
+        b.click('[data-target="#sos"]')
+        b.wait_visible("#sos")
+        m.execute("until pgrep -x sosreport >/dev/null; do sleep 1; done")
+
+        b.click("#sos-cancel")
+        b.wait_not_visible("#sos")
+        # cleans up properly; unfortunately closing the process is async, so need to retry a few times
+        m.execute("while pgrep -a -x sosreport; do sleep 1; done", timeout=10)
+        self.assertEqual(m.execute("ls /var/tmp/sosreport* 2>/dev/null || true"), "")
+
     def testAppStream(self):
         b = self.browser
         m = self.machine
@@ -92,10 +109,10 @@ threads=1
         b.wait_not_present(".app-list-empty .spinner")
         image_os = m.image.split('-')[0]
         if image_os in ['fedora', 'debian', 'ubuntu']:
-            b.wait_present(".app-list tr:contains('Diagnostic Reports')")
-            b.wait_present(".app-list tr:contains('Diagnostic Reports') button:contains('Remove')")
+            b.wait_present(".app-list .pf-c-data-list__item-row div[rowId='Diagnostic Reports']")
+            b.wait_present(".app-list .pf-c-data-list__item-row div[rowId='Diagnostic Reports'] button:contains('Remove')")
         else:
-            b.wait_not_present(".app-list tr:contains('Diagnostic Reports')")
+            b.wait_not_present(".app-list .pf-c-data-list__item-row div[rowId='Diagnostic Reports']")
 
 
 if __name__ == '__main__':

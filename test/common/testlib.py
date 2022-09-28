@@ -324,14 +324,15 @@ class Browser:
             self.wait_val(selector, val)
 
     def set_file_autocomplete_val(self, identifier, location):
-        file_item_selector_template = "#{0} li a:contains({1})"
+        file_item_selector_template = "#{0} li button:contains({1})"
 
         path = ''
         index = 0
+        self.click("label[for={0}] + div button".format(identifier))
+        self.wait_present("#" + identifier)
         for path_part in filter(None, location.split('/')):
             path += '/' + path_part
-            file_item_selector = file_item_selector_template.format(identifier, path_part)
-            self.click("label[for={0}] + div input[type=text]".format(identifier))
+            file_item_selector = file_item_selector_template.format(identifier, path)
             self.click(file_item_selector)
             if index != len(list(filter(None, location.split('/')))) - 1 or location[-1] == '/':
                 self.wait_val("label[for={0}] + div input[type=text]".format(identifier), path + '/')
@@ -698,7 +699,7 @@ class MachineCase(unittest.TestCase):
     image = testvm.DEFAULT_IMAGE
     runner = None
     machine = None
-    global_machine = None
+    global_machines = {}
     machines = {}
     machine_class = None
     browser = None
@@ -711,22 +712,26 @@ class MachineCase(unittest.TestCase):
     provision = None
 
     @classmethod
-    def get_global_machine(klass, restrict=True):
-        if not klass.global_machine:
-            klass.global_machine = klass.new_machine(klass, restrict=restrict, cleanup=False)
+    def get_global_machine(klass, restrict=True, id="1"):
+        if id not in klass.global_machines:
+            klass.global_machines[id] = m = klass.new_machine(klass, restrict=restrict, cleanup=False)
             if opts.trace:
-                print("Starting global machine {0}".format(klass.global_machine.label))
-            klass.global_machine.start()
-        return klass.global_machine
+                print("Starting global machine {0}: {1}".format(id, m.label))
+            m.start()
+        return klass.global_machines[id]
 
     @classmethod
-    def kill_global_machine(klass):
+    def kill_global_machine(klass, id):
         if klass.network:
             klass.network.kill()
             klass.network = None
-        if klass.global_machine:
-            klass.global_machine.kill()
-            klass.global_machine = None
+        klass.global_machines[id].kill()
+        del klass.global_machines[id]
+
+    @classmethod
+    def kill_global_machines(klass):
+        for id in list(klass.global_machines):
+            klass.kill_global_machine(id)
 
     def label(self):
         (unused, sep, label) = self.id().partition(".")
@@ -1340,13 +1345,17 @@ class MachineCase(unittest.TestCase):
         else:
             self.addCleanup(self.machine.execute, "rm -rf %s" % path)
 
-    def write_file(self, path, content):
+    def write_file(self, path, content, append=False, owner=None, perm=None):
         '''Write a new file on primary machine
 
         This is safe for @nondestructive tests, the file will be removed during cleanup.
+
+        If @append is True, append to existing file instead of replacing it.
+        @owner is the desired file owner as chown shell string (e.g. "admin:nogroup")
+        @perm is the desired file permission as chmod shell string (e.g. "0600")
         '''
         m = self.machine
-        m.write(path, content)
+        m.write(path, content, append=append, owner=owner, perm=perm)
 
         if self.is_nondestructive():
             self.addCleanup(m.execute, "rm -f {0}".format(path))
@@ -1487,11 +1496,11 @@ class TapRunner:
         hostname = socket.gethostname().split(".")[0]
         details = "[{0}s on {1}]".format(duration, hostname)
 
-        MachineCase.kill_global_machine()
+        MachineCase.kill_global_machines()
 
         # Return 77 if all tests were skipped
         if len(skips) == test_count:
-            sys.stdout.write("# SKIP {1}\n".format(failures, ", ".join(["{0} {1}".format(str(s[0]), s[1]) for s in skips])))
+            sys.stdout.write("# SKIP {0}\n".format(", ".join(["{0} {1}".format(str(s[0]), s[1]) for s in skips])))
             return 77
         if failures:
             sys.stdout.write("# {0} TEST{1} FAILED {2}\n".format(failures, "S" if failures > 1 else "", details))

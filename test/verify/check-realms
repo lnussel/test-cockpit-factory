@@ -19,7 +19,6 @@
 
 import re
 import time
-import os
 import struct
 import hmac
 import hashlib
@@ -79,7 +78,7 @@ class CommonTests:
         b = self.browser
 
         # Tell realmd to enable domain-qualified logins; unqualified ones are covered in testUnqualifiedUsers
-        m.execute("printf '[cockpit.lan]\\nfully-qualified-names = yes\\n'  >> /etc/realmd.conf")
+        m.write("/etc/realmd.conf", "[cockpit.lan]\nfully-qualified-names = yes\n", append=True)
 
         self.login_and_go("/system")
 
@@ -95,18 +94,19 @@ class CommonTests:
         # Join cockpit.lan
         b.click(self.domain_sel)
         b.wait_popup("realms-op")
-        with b.wait_timeout(180):
-            b.set_val(self.op_address, "cockpit.lan")
+        b.set_val(self.op_address, "cockpit.lan")
+        with b.wait_timeout(300):
             b.wait_text(".realms-op-address-error", "Contacted domain")
-            b.wait_attr(self.op_admin, "placeholder", 'e.g. "%s"' % self.admin_user)
-            b.set_val(self.op_admin, self.admin_user)
-            b.set_val(self.op_admin_password, self.admin_password)
-            b.wait_not_visible(".realms-op-leave-only-row")
-            b.click(".realms-op-apply")
+        b.wait_attr(self.op_admin, "placeholder", 'e.g. "%s"' % self.admin_user)
+        b.set_val(self.op_admin, self.admin_user)
+        b.set_val(self.op_admin_password, self.admin_password)
+        b.wait_not_visible(".realms-op-leave-only-row")
+        b.click(".realms-op-apply")
+        with b.wait_timeout(300):
             b.wait_popdown("realms-op")
 
-            # Check that this has worked
-            wait_number_domains(1)
+        # Check that this has worked
+        wait_number_domains(1)
 
         # when joined to a domain, changing the hostname is fatal, so should be disabled
         b.wait_not_present("#system_information_hostname_button")
@@ -256,7 +256,7 @@ class CommonTests:
 
         # Tell realmd to not enable domain-qualified logins
         # (https://bugzilla.redhat.com/show_bug.cgi?id=1575538)
-        m.execute("printf '[cockpit.lan]\\nfully-qualified-names = no\\n'  >> /etc/realmd.conf")
+        m.write("/etc/realmd.conf", "[cockpit.lan]\nfully-qualified-names = no\n", append=True)
         m.execute("echo %s | realm join -vU %s cockpit.lan" % (self.admin_password, self.admin_user), timeout=300)
 
         # wait until domain user works
@@ -307,6 +307,96 @@ class CommonTests:
         # sometimes polling for info and joining a domain creates this noise
         self.allow_journal_messages('.*org.freedesktop.DBus.Error.Spawn.ChildExited.*')
 
+    def checkClientCertAuthentication(self):
+        '''Common tests for certificate authentication
+
+        This assumes that IdM and sssd are all set up correctly already.
+        '''
+        m = self.machine
+
+        # join domain, wait until it works
+        m.write("/etc/realmd.conf", "[cockpit.lan]\nfully-qualified-names = no\n", append=True)
+        m.execute("echo %s | realm join -vU %s cockpit.lan" % (self.admin_password, self.admin_user), timeout=300)
+        m.execute('while ! id alice; do sleep 5; systemctl restart sssd; done', timeout=300)
+
+        # upload certificates to client machine
+        m.upload(["alice.pem", "alice.key", "bob.pem", "bob.key"], "/var/tmp",
+                 relative_dir="src/tls/ca/")
+        alice_cert_key = ['--cert', "/var/tmp/alice.pem", '--key', "/var/tmp/alice.key"]
+        alice_user_pass = ['-u', 'alice:' + self.alice_password]
+        bob_cert_key = ['--cert', "/var/tmp/bob.pem", '--key', "/var/tmp/bob.key"]
+
+        # ensure sssd certificate lookup works
+        user_obj = m.execute('busctl call org.freedesktop.sssd.infopipe /org/freedesktop/sssd/infopipe/Users '
+                             'org.freedesktop.sssd.infopipe.Users FindByCertificate s -- '
+                             '''"$(cat /var/tmp/alice.pem)" | sed 's/^o "//; s/"$//' ''')
+        self.assertEqual(m.execute('busctl get-property org.freedesktop.sssd.infopipe ' + user_obj.strip() +
+                                   ' org.freedesktop.sssd.infopipe.Users.User name').strip(),
+                         's "alice"')
+
+        # These tests have to be run with curl, as chromium-headless does not support selecting/handling client-side
+        # certificates; it just rejects cert requests. For interactive tests, grab src/tls/ca/alice.p12 and import
+        # it into the browser.
+
+        def do_test(authopts, expected, not_expected=[], session_leader=None):
+            m.start_cockpit(tls=True)
+            output = m.execute(['curl', '-ksS', '-D-'] + authopts + ['https://localhost:9090/cockpit/login'])
+            for s in expected:
+                self.assertIn(s, output)
+            for s in not_expected:
+                self.assertNotIn(s, output)
+
+            # sessions/users often hang around in State=closing for a long time, ignore these
+            if session_leader:
+                m.execute('until [ "$(loginctl show-user --property=State --value alice)" = "active" ]; do sleep 1; done')
+                sessions = m.execute('loginctl show-user --property=Sessions --value alice').strip().split()
+                self.assertGreaterEqual(len(sessions), 1)
+                for session in sessions:
+                    out = m.execute('loginctl session-status ' + session)
+                    if "State: active" in out:  # skip closing sessions
+                        self.assertIn(session_leader, out)
+                        self.assertIn('cockpit-bridge', out)
+                        self.assertIn('cockpit; type web', out)
+                        break
+                else:
+                    self.fail("no active session for active user")
+
+                # sessions time out after 10s, but let's not wait for that
+                m.execute('loginctl terminate-session ' + sessions[0])
+                # wait until the session is gone
+                m.execute("while loginctl show-user alice | grep -q 'State=active'; do sleep 1; done")
+
+            m.stop_cockpit()
+
+        self.allow_journal_messages("alice is not allowed to run sudo on x0.  This incident will be reported.")
+        self.allow_authorize_journal_messages()
+
+        # cert auth should not be enabled by default
+        do_test(alice_cert_key, ["HTTP/1.1 401 Authentication required", '"authorize"'])
+        # password auth should work
+        do_test(alice_user_pass, ['HTTP/1.1 200 OK', '"csrf-token"'], session_leader='cockpit-session')
+
+        # enable cert based auth
+        m.write("/etc/cockpit/cockpit.conf", '[WebService]\nClientCertAuthentication = true\n', append=True)
+        # cert auth should work now
+        do_test(alice_cert_key, ['HTTP/1.1 200 OK', '"csrf-token"'])
+        # password auth, too
+        do_test(alice_user_pass, ['HTTP/1.1 200 OK', '"csrf-token"'], session_leader='cockpit-session')
+        # cert auth should go through PAM stack and re-create home dir
+        m.execute("rm -r ~alice")
+        do_test(alice_cert_key, ['HTTP/1.1 200 OK', '"csrf-token"'])
+        m.execute("test -f ~alice/.bashrc")
+
+        # another certificate gets rejected
+        do_test(bob_cert_key, ["HTTP/1.1 401 Authentication failed", '<h1>Authentication failed</h1>'],
+                not_expected=["crsf-token"])
+
+        # disallow password auth
+        m.write("/etc/cockpit/cockpit.conf", "[Basic]\naction = none\n", append=True)
+        do_test(alice_cert_key, ['HTTP/1.1 200 OK', '"csrf-token"'])
+        do_test(alice_user_pass, ['HTTP/1.1 401 Authentication disabled', '<h1>Authentication disabled</h1>'],
+                not_expected=["crsf-token"])
+
 
 @skipImage("No realmd available", "fedora-coreos")
 class TestRealms(MachineCase):
@@ -332,11 +422,18 @@ class TestIPA(TestRealms, CommonTests):
         super().setUp()
         self.admin_user = "admin"
         self.admin_password = "foobarfoo"
+        self.alice_password = 'WonderLand123'
         self.expected_server_software = "ipa"
         self.machines['services'].execute("/run-freeipa")
         # Wait for FreeIPA to come up and DNS to work as expected
         # https://bugzilla.redhat.com/show_bug.cgi?id=1071356#c11
         wait(lambda: self.machine.execute("nslookup -type=SRV _ldap._tcp.cockpit.lan"))
+
+        # wait until FreeIPA started up
+        self.machines['services'].execute("""docker exec -i freeipa sh -ec '
+            while ! echo %s | kinit -f %s; do sleep 5; done
+            while ! ipa user-find >/dev/null; do sleep 5; done'
+            """ % (self.admin_password, self.admin_user), timeout=300)
 
     def checkBackendSpecifics(self):
         '''Check domain backend specific integration'''
@@ -409,12 +506,6 @@ class TestIPA(TestRealms, CommonTests):
 
         m = self.machine
         b = self.browser
-
-        # wait until FreeIPA started up
-        out = self.machines['services'].execute("""docker exec -i freeipa sh -ec '
-            while ! echo %s | kinit -f %s; do sleep 5; done
-            while ! ipa user-find >/dev/null; do sleep 5; done'
-            """ % (self.admin_password, self.admin_user), timeout=300)
 
         # set up "alice" user with HOTP; that won't affect existing users (admin)
         # https://access.redhat.com/documentation/en-us/red_hat_enterprise_linux/7/html/linux_domain_identity_authentication_and_policy_guide/otp
@@ -489,147 +580,23 @@ class TestIPA(TestRealms, CommonTests):
         m = self.machine
 
         ipa_machine = self.machines['services']
-        # need to wait for IPA to start up
-        ipa_machine.execute("""docker exec -i freeipa sh -ec '
-            while ! echo %s | kinit -f %s; do sleep 5; done
-            export LC_ALL=C.UTF-8 && while ! ipa user-find >/dev/null; do sleep 5; done'
-            """ % (self.admin_password, self.admin_user), timeout=300)
+        with open("src/tls/ca/alice.pem") as f:
+            alice_cert = f.read().strip()
+        # IPA does not like the ---BEGIN/END lines
+        alice_cert = '\n'.join([l for l in alice_cert.splitlines() if not l.startswith("----")])
         # set up an IPA user with a TLS certificate; can't use "admin" due to https://pagure.io/freeipa/issue/6683
         ipa_machine.execute(r"""docker exec -i freeipa sh -exc '
-CERTUSER=jane
-ipa user-add --first=$CERTUSER --last="developer" $CERTUSER
-yes foobar | ipa user-mod --password $CERTUSER
-ipa user-mod --password-expiration='2030-01-01T00:00:00Z' $CERTUSER
-# some browsers insist on "Key Usage" extension
-printf "[req]\ndistinguished_name=dn\nextensions=v3_req\n[v3_req]\nkeyUsage=digitalSignature,keyEncipherment,keyAgreement\n[dn]\n" > openssl.cnf
-openssl req -x509 -newkey rsa:2048 -days 365 -nodes -keyout ${CERTUSER}.key -out ${CERTUSER}.pem -config openssl.cnf -extensions v3_req -subj "/CN=$CERTUSER"
-openssl x509 -outform der -in ${CERTUSER}.pem -out ${CERTUSER}.der
-ipa user-add-cert $CERTUSER --certificate="$(base64 ${CERTUSER}.der)"
-# for browser import with manual tests
-openssl pkcs12 -export -password pass:foo -in ${CERTUSER}.pem -inkey ${CERTUSER}.key -out ${CERTUSER}.p12
-'
-for s in key p12 pem; do docker cp freeipa:jane.$s .; done
-""")
-        jane_pem = os.path.join(self.tmpdir, "jane.pem")
-        jane_key = os.path.join(self.tmpdir, "jane.key")
-        ipa_machine.download("jane.key", jane_key)
-        ipa_machine.download("jane.pem", jane_pem)
-        m.upload([jane_key, jane_pem], "/var/tmp")
+ipa user-add --first=Alice --last="Developer" alice
+yes "%(password)s" | ipa user-mod --password alice
+ipa user-mod --password-expiration='2030-01-01T00:00:00Z' alice
+ipa user-add-cert alice --certificate="%(cert)s"
+' """ % {"cert": alice_cert, "password": self.alice_password})
 
-        # On older Debian/Ubuntu D-Bus activation of ifp is disabled, enable it manually; see https://bugs.debian.org/925026
-        static_ifp_conf = m.image in ["debian-stable"]
-        if static_ifp_conf:
-            m.write("/etc/sssd/conf.d/ifp.conf", "[sssd]\nservices = nss, sudo, pam, ssh, ifp\n")
-            m.execute("chmod 600 /etc/sssd/conf.d/ifp.conf")
+        # On Debian 9, D-Bus activation of ifp is disabled, enable it manually; see https://bugs.debian.org/925026
+        if m.image in ["debian-stable"]:
+            m.write("/etc/sssd/conf.d/ifp.conf", "[sssd]\nservices = nss, sudo, pam, ssh, ifp\n", perm="0600")
 
-        # join domain, wait until it works
-        m.execute("printf '[cockpit.lan]\\nfully-qualified-names = no\\n'  >> /etc/realmd.conf")
-        m.execute("echo %s | realm join -vU %s cockpit.lan" % (self.admin_password, self.admin_user), timeout=300)
-        m.execute('while ! id jane; do sleep 5; systemctl restart sssd; done', timeout=300)
-
-        # ensure sssd certificate lookup works
-        user_obj = m.execute('busctl call org.freedesktop.sssd.infopipe /org/freedesktop/sssd/infopipe/Users '
-                             'org.freedesktop.sssd.infopipe.Users FindByCertificate s -- '
-                             '''"$(cat /var/tmp/jane.pem)" | sed 's/^o "//; s/"$//' ''')
-        self.assertEqual(m.execute('busctl get-property org.freedesktop.sssd.infopipe ' + user_obj.strip() +
-                                   ' org.freedesktop.sssd.infopipe.Users.User name').strip(),
-                         's "jane"')
-
-        # These tests have to be run with curl, as chromium-headless does not support selecting/handling client-side
-        # certificates; it just rejects cert requests. For interactive tests, grab jane.p12 from the services VM and import
-        # it into the browser.
-
-        def do_test(authopts, expected, not_expected=[], session_leader=None):
-            m.start_cockpit(tls=True)
-            output = m.execute(['curl', '-ksS', '-D-'] + authopts + ['https://localhost:9090/cockpit/login'])
-            for s in expected:
-                self.assertIn(s, output)
-            for s in not_expected:
-                self.assertNotIn(s, output)
-
-            if session_leader:
-                tries = 0
-                while tries < 10:
-                    out = m.execute('loginctl show-user --property=Sessions jane')
-                    sessions = out.split('=')[1].split()
-                    if len(sessions) == 1:
-                        break
-                    time.sleep(5)
-                    tries += 1
-                self.assertEqual(len(sessions), 1)
-                out = m.execute('loginctl session-status ' + sessions[0])
-                self.assertIn(session_leader, out)
-                self.assertIn('cockpit-bridge', out)
-                self.assertIn('cockpit; type web', out)
-                # sessions time out after 10s, but let's not wait for that
-                m.execute('loginctl terminate-session ' + sessions[0])
-                # wait until the session is gone
-                m.execute("while loginctl show-user jane; do sleep 1; done")
-
-            m.stop_cockpit()
-
-        self.allow_journal_messages("jane is not allowed to run sudo on x0.  This incident will be reported.")
-        self.allow_authorize_journal_messages()
-
-        # cert auth should not be enabled by default
-        do_test(['--cert', '/var/tmp/jane.pem', '--key', '/var/tmp/jane.key'],
-                ["HTTP/1.1 401 Authentication required", '"authorize"'])
-        # password auth should work
-        do_test(['-u', 'jane:foobar'],
-                ['HTTP/1.1 200 OK', '"csrf-token"'],
-                session_leader='cockpit-session')
-
-        # enable cert based auth
-        m.execute("printf '[WebService]\nClientCertAuthentication = true\n' >> /etc/cockpit/cockpit.conf")
-        # cert auth should work now
-        do_test(['--cert', '/var/tmp/jane.pem', '--key', '/var/tmp/jane.key'],
-                ['HTTP/1.1 200 OK', '"csrf-token"'])
-        # password auth, too
-        do_test(['-u', 'jane:foobar'],
-                ['HTTP/1.1 200 OK', '"csrf-token"'],
-                session_leader='cockpit-session')
-        # cert auth should go through PAM stack and re-create home dir
-        home_dir = m.execute("getent passwd jane | cut -d: -f6").strip()
-        m.execute("rm -r " + home_dir)
-        do_test(['--cert', '/var/tmp/jane.pem', '--key', '/var/tmp/jane.key'],
-                ['HTTP/1.1 200 OK', '"csrf-token"'])
-        m.execute('test -f %s/.bashrc' % home_dir)
-
-        # another certificate gets rejected
-        m.execute("openssl req -x509 -newkey rsa:2048 -days 365 -nodes -keyout /tmp/jane2.key -out /tmp/jane2.pem -subj /CN=jane")
-        do_test(['--cert', '/tmp/jane2.pem', '--key', '/tmp/jane2.key'],
-                ["HTTP/1.1 401 Authentication failed", '<h1>Authentication failed</h1>'],
-                not_expected=["crsf-token"])
-
-        # check expired certificate
-        m.execute("openssl req -new -key /var/tmp/jane.key -out /tmp/jane.csr -subj /CN=jane")
-        m.execute("openssl x509 -in /tmp/jane.csr -out /var/tmp/jane-exp.pem -req -signkey /var/tmp/jane.key -days -1")
-        m.start_cockpit(tls=True)
-        m.execute('! curl -ksS --cert /var/tmp/jane-exp.pem --key /var/tmp/jane.key https://localhost:9090/cockpit/login')
-        m.stop_cockpit()
-        self.allow_journal_messages('.*Invalid TLS peer certificate.* expired')
-        self.allow_journal_messages('.*TLS handshake failed: Error in the certificate verification.*')
-
-        # disallow password auth
-        m.execute("printf '[Basic]\naction = none\n' >> /etc/cockpit/cockpit.conf")
-        do_test(['--cert', '/var/tmp/jane.pem', '--key', '/var/tmp/jane.key'],
-                ['HTTP/1.1 200 OK', '"csrf-token"'])
-        do_test(['-u', 'jane:foobar'],
-                ['HTTP/1.1 401 Authentication disabled', '<h1>Authentication disabled</h1>'],
-                not_expected=["crsf-token"])
-
-        # sssd-dbus not available
-        if static_ifp_conf:
-            m.execute("mv /etc/sssd/conf.d/ifp.conf /etc/sssd/conf.d/ifp.conf.disabled && systemctl restart sssd")
-        else:
-            m.execute("systemctl mask sssd-ifp && systemctl stop sssd-ifp")
-        do_test(['--cert', '/var/tmp/jane.pem', '--key', '/var/tmp/jane.key'],
-                ["HTTP/1.1 401 Authentication failed", '<h1>Authentication failed</h1>'],
-                not_expected=["crsf-token"])
-        if static_ifp_conf:
-            m.execute("mv /etc/sssd/conf.d/ifp.conf.disabled /etc/sssd/conf.d/ifp.conf && systemctl restart sssd")
-        else:
-            m.execute("systemctl unmask sssd-ifp")
+        self.checkClientCertAuthentication()
 
 
 @skipImage("adcli not on test images", "debian-stable", "debian-testing", "ubuntu-stable", "ubuntu-2004")
@@ -638,18 +605,27 @@ class TestAD(TestRealms, CommonTests):
         super().setUp()
         self.admin_user = "Administrator"
         self.admin_password = "foobarFoo123"
+        self.alice_password = 'WonderLand123'
         self.expected_server_software = "active-directory"
+        # necessary to run ldapmodify; FIXME: change this on the services image itself
+        self.machines['services'].execute("sed -i 's/-e/-e INSECURELDAP=true &/' /run-samba-domain")
         self.machines['services'].execute("/run-samba-domain")
+
+        m = self.machine
+
         # Wait for AD to come up and DNS to work as expected
-        wait(lambda: self.machine.execute("nslookup -type=SRV _ldap._tcp.cockpit.lan"))
+        wait(lambda: m.execute("nslookup -type=SRV _ldap._tcp.cockpit.lan"))
         # DNS is not sufficient yet, needs to start LDAP server as well
-        self.machine.execute("until nc -z f0.cockpit.lan 389; do sleep 1; done")
+        m.execute("until nc -z f0.cockpit.lan 389; do sleep 1; done")
         # also wait for Kerberos
-        self.machine.execute("set -e; until echo %s | kinit %s@COCKPIT.LAN; do sleep 1; done; kdestroy" % (self.admin_password, self.admin_user))
+        m.execute("set -e; until echo %s | kinit %s@COCKPIT.LAN; do sleep 1; done; kdestroy" % (self.admin_password, self.admin_user))
 
         # allow sudo access to domain admins; FIXME: Is there a server-side setting for this,
         # similar to "ipa-advise enable-admins-sudo"?
-        self.machine.write("/etc/sudoers.d/domain-admins", r"%domain\ admins@COCKPIT.LAN ALL=(ALL) ALL")
+        m.write("/etc/sudoers.d/domain-admins", r"%domain\ admins@COCKPIT.LAN ALL=(ALL) ALL")
+
+        # HACK: work around https://bugzilla.redhat.com/show_bug.cgi?id=1839805
+        m.write("/etc/sssd/conf.d/rhbz1839805.conf", "[domain/cockpit.lan]\nad_gpo_access_control=disabled\n", perm="0600")
 
     def checkBackendSpecifics(self):
         '''Check domain backend specific integration'''
@@ -661,8 +637,57 @@ class TestAD(TestRealms, CommonTests):
 
         pass
 
-    def testQualifiedUsers(self):
-        super().testQualifiedUsers()
+    def testUnqualifiedUsers(self):
+        '''Extend the test to check a new AD user'''
+
+        super().testUnqualifiedUsers()
+
+        m = self.machine
+        b = self.browser
+
+        m.start_cockpit()
+        # create another AD user
+        self.machines['services'].execute("docker exec -i samba samba-tool user add alice %s" % self.alice_password)
+        # ensure it works
+        m.execute('id alice')
+        b.login_and_go('/system', user='alice', password=self.alice_password)
+        b.wait_visible("#overview")
+        b.logout()
+
+    def testClientCertAuthentication(self):
+        m = self.machine
+
+        services_machine = self.machines['services']
+        with open("src/tls/ca/alice.pem") as f:
+            alice_cert = f.read().strip()
+        # mangle into form palatable for LDAP
+        alice_cert = ''.join([l for l in alice_cert.splitlines() if not l.startswith("----")])
+        # set up an AD user and import their TLS certificate; avoid using the common "userCertificate;binary",
+        # as that does not work with Samba
+        services_machine.execute(r"""docker exec -i samba sh -exc '
+samba-tool user add alice %(alice_pass)s
+printf "version: 1\ndn: cn=alice,cn=users,dc=cockpit,dc=lan\nchangetype: modify\nadd: userCertificate\nuserCertificate: %(alice_cert)s\n" | \
+        ldapmodify -v -U Administrator -w '%(admin_pass)s'
+# for debugging:
+ldapsearch -v -U Administrator -w '%(admin_pass)s' -b 'cn=alice,cn=users,dc=cockpit,dc=lan'
+' """ % { "alice_pass": self.alice_password, "admin_pass": self.admin_password, "alice_cert": alice_cert })
+
+        # set up sssd for certificate mapping to AD
+        # see sssd.conf(5) "CERTIFICATE MAPPING SECTION" and sss-certmap(5)
+        m.write("/etc/sssd/conf.d/certmap.conf", """
+[certmap/cockpit.lan/certs]
+# our test certificates don't have EKU, and as we match full certificates it is not important to check anything here
+matchrule = <KU>digitalSignature
+# default rule; doesn't work because samba's LDAP doesn't understand ";binary"
+# maprule = LDAP:(userCertificate;binary={cert!bin})
+# match verbatim base64 certificate
+maprule = LDAP:(userCertificate={cert!base64})
+# match cert properties only; this looks at SubjectAlternativeName, which our test certs don't have
+# this also requires CA validation in cockpit-tls or sssd, which we don't have yet
+# maprule = (|(userPrincipalName={subject_principal})(sAMAccountName={subject_principal.short_name}))
+""", perm="0600")
+
+        self.checkClientCertAuthentication()
 
 
 JOIN_SCRIPT = """
@@ -739,7 +764,7 @@ class TestKerberos(MachineCase):
 
         # Tell realmd to not enable domain-qualified logins
         # (https://bugzilla.redhat.com/show_bug.cgi?id=1575538)
-        m.execute("printf '[cockpit.lan]\\nfully-qualified-names = no\\n'  >> /etc/realmd.conf")
+        m.write("/etc/realmd.conf", "[cockpit.lan]\nfully-qualified-names = no\n", append=True)
 
         # delete the local admin user, going to use the IPA one instead
         m.execute("userdel admin")
@@ -830,7 +855,7 @@ class TestKerberos(MachineCase):
         self.assertIn('"csrf-token"', output)
         self.allow_restart_journal_messages()
 
-        m.execute("printf '[Negotiate]\naction = none\n' >> /etc/cockpit/cockpit.conf")
+        m.write("/etc/cockpit/cockpit.conf", "[Negotiate]\naction = none\n", append=True)
         m.restart_cockpit()
         output = m.execute(['/usr/bin/curl', '-s', '--negotiate', '--delegation', 'always', '-u', ':', "-D", "-",
                             '--resolve', 'x0.cockpit.lan:9090:10.111.113.1',

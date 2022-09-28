@@ -29,7 +29,7 @@
 
 static char *last_txt_msg = NULL;
 static char *conversation = NULL;
-static FILE *login_messages = NULL;
+static int login_messages_fd = -1;
 
 /* This program opens a session for a given user and runs the bridge in
  * it.  It is used to manage localhost; for remote hosts sshd does
@@ -329,7 +329,7 @@ map_gssapi_to_local (gss_name_t name,
         }
       else
         {
-          debug ("ignoring non-existant gssapi local user '%s'", str);
+          debug ("ignoring non-existent gssapi local user '%s'", str);
 
           /* If the local user doesn't exist, pretend gss_localname() failed */
           free (str);
@@ -360,7 +360,7 @@ map_gssapi_to_local (gss_name_t name,
                 }
               else
                 {
-                  warnx ("non-existant local user '%s'", str);
+                  warnx ("non-existent local user '%s'", str);
                   free (str);
                   str = NULL;
                 }
@@ -470,7 +470,7 @@ perform_gssapi (const char *authorization)
       free (challenge);
 
       /*
-       * The GSSAPI mechanism can require multiple chanllenge response
+       * The GSSAPI mechanism can require multiple challenge response
        * iterations ... so do that here.
        */
       free (input.value);
@@ -562,16 +562,57 @@ perform_tlscert (void)
 }
 
 
+static void
+store_krb_credentials (gss_cred_id_t creds, uid_t uid, gid_t gid)
+{
+  assert (creds != GSS_C_NO_CREDENTIAL);
+
+  bool was_root = getuid() == 0;
+
+  /* We want to do this before the fork(), so we need to temporarily
+   * change our euid/egid
+   */
+  if (setresgid (gid, gid, -1) != 0 || setresuid (uid, uid, -1) != 0)
+    err (127, "Unable to temporarily drop permissions to store gss credentials");
+
+  assert (geteuid () == uid && getegid() == gid);
+
+  krb5_context k5;
+  int res = krb5_init_context (&k5);
+  if (res == 0)
+    {
+      gss_key_value_set_desc store;
+      struct gss_key_value_element_struct element;
+      OM_uint32 major, minor;
+
+      store.count = 1;
+      store.elements = &element;
+      element.key = "ccache";
+      element.value = krb5_cc_default_name (k5);
+
+      debug ("storing kerberos credentials in session: %s", element.value);
+
+      major = gss_store_cred_into (&minor, creds, GSS_C_INITIATE, GSS_C_NULL_OID, 1, 1, &store, NULL, NULL);
+      if (GSS_ERROR (major))
+        warnx ("couldn't store gssapi credentials: %s", gssapi_strerror (GSS_C_NO_OID, major, minor));
+
+      krb5_free_context (k5);
+    }
+  else
+    {
+      warnx ("couldn't initialize kerberos context: %s", krb5_get_error_message (NULL, res));
+    }
+
+
+  if (was_root && (setresuid (0, 0, 0) != 0 || setresgid (0, 0, 0) != 0))
+    err (127, "Unable to restore permissions after storing gss credentials");
+}
+
 static int
 session (char **env)
 {
   char *argv[] = { NULL /* user's shell */, "-c", "exec cockpit-bridge >&3", NULL };
-  gss_key_value_set_desc store;
-  struct gss_key_value_element_struct element;
-  OM_uint32 major, minor;
-  krb5_context k5;
   struct passwd *pwd;
-  int res;
 
   /* determine the user's shell and run the bridge through it, so that we catch
    * disabled accounts like /bin/false or /bin/nologin shells */
@@ -582,30 +623,6 @@ session (char **env)
   if (!argv[0])
     errx (EX, "passwd entry for user has NULL shell");
 
-  if (creds != GSS_C_NO_CREDENTIAL)
-    {
-      res = krb5_init_context (&k5);
-      if (res == 0)
-        {
-          store.count = 1;
-          store.elements = &element;
-          element.key = "ccache";
-          element.value = krb5_cc_default_name (k5);
-
-          debug ("storing kerberos credentials in session: %s", element.value);
-
-          major = gss_store_cred_into (&minor, creds, GSS_C_INITIATE, GSS_C_NULL_OID, 1, 1, &store, NULL, NULL);
-          if (GSS_ERROR (major))
-            warnx ("couldn't store gssapi credentials: %s", gssapi_strerror (GSS_C_NO_OID, major, minor));
-
-          krb5_free_context (k5);
-        }
-      else
-        {
-          warnx ("couldn't initialize kerberos context: %s", krb5_get_error_message (NULL, res));
-        }
-    }
-
   debug ("executing cockpit-bridge through user shell %s", pwd->pw_shell);
 
   /* connect our and cockpit-bridge's stdout via fd 3, to avoid stdout output
@@ -615,8 +632,8 @@ session (char **env)
   int n_remap_fds = 4;
 
   /* This is the "COCKPIT_LOGIN_MESSAGES_MEMFD" blob (ie: fd 4) */
-  if (login_messages)
-    remap_fds[n_remap_fds++] = fileno (login_messages);
+  if (login_messages_fd != -1)
+    remap_fds[n_remap_fds++] = login_messages_fd;
 
   fd_remap (remap_fds, n_remap_fds);
 
@@ -713,8 +730,6 @@ main (int argc,
     {
       if (pam_putenv (pamh, "COCKPIT_LOGIN_MESSAGES_MEMFD=4") != PAM_SUCCESS)
         errx (EX, "Failed to set COCKPIT_LOGIN_MESSAGES_MEMFD=4 in PAM environment");
-
-      login_messages = open_memfd ("cockpit login messages");
     }
 
   env = pam_getenvlist (pamh);
@@ -732,12 +747,18 @@ main (int argc,
       signal (SIGINT, pass_to_child);
       signal (SIGQUIT, pass_to_child);
 
+      FILE *login_messages = open_memfd ("cockpit login messages");
+
       fprintf (login_messages, "{\"version\": 1");
 
       utmp_log (1, rhost, login_messages);
 
       fprintf (login_messages, "}");
-      seal_memfd (login_messages);
+
+      login_messages_fd = seal_memfd (&login_messages);
+
+      if (creds != GSS_C_NO_CREDENTIAL)
+        store_krb_credentials (creds, pwd->pw_uid, pwd->pw_gid);
 
       status = fork_session (env, session);
 
@@ -747,7 +768,7 @@ main (int argc,
       signal (SIGINT, SIG_DFL);
       signal (SIGQUIT, SIG_DFL);
 
-      fclose (login_messages);
+      close (login_messages_fd);
 
       res = pam_setcred (pamh, PAM_DELETE_CRED);
       if (res != PAM_SUCCESS)

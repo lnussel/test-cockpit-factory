@@ -35,6 +35,7 @@
 
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
 
 typedef struct {
   gchar *name;
@@ -81,8 +82,6 @@ struct _CockpitRouter {
 
   gboolean superuser_init_in_progress;
   gboolean superuser_legacy_init;
-  gchar *superuser_init_id;
-  GList *superuser_init_next_rule;
 
   CockpitRouterPromptAnswerFunction *superuser_answer_function;
   gpointer superuser_answer_data;
@@ -486,17 +485,17 @@ is_empty (const gchar *s)
 static void
 cockpit_router_normalize_host_params (JsonObject *options)
 {
-  const gchar *sharable = NULL;
+  const gchar *shareable = NULL;
   const gchar *user = NULL;
   gboolean needs_private = FALSE;
 
-  if (!cockpit_json_get_string (options, "session", NULL, &sharable))
-    sharable = NULL;
+  if (!cockpit_json_get_string (options, "session", NULL, &shareable))
+    shareable = NULL;
 
   if (!cockpit_json_get_string (options, "user", NULL, &user))
     user = NULL;
 
-  if (!sharable)
+  if (!shareable)
     {
       /* Fallback to older ways of indicating this */
       if (user || json_object_has_member (options, "host-key"))
@@ -1712,62 +1711,43 @@ cockpit_router_dbus_startup (CockpitRouter *router)
 
 /* Superuser init */
 
-static void superuser_init_step (CockpitRouter *router);
-
 static void
-superuser_init_start (CockpitRouter *router,
-                      const gchar *id)
-{
-  router->superuser_init_in_progress = TRUE;
-  router->superuser_init_next_rule = router->rules;
-  router->superuser_init_id = g_strdup (id);
-
-  superuser_init_step (router);
-}
-
-static void
-superuser_init_step_done (const gchar *error, gpointer user_data)
+superuser_init_done (const gchar *error, gpointer user_data)
 {
   CockpitRouter *router = user_data;
 
   if (error)
-    {
-      router->superuser_rule = NULL;
-      superuser_init_step (router);
-    }
-  else
-    {
-      router->superuser_init_in_progress = FALSE;
-      g_free (router->superuser_init_id);
-      router->superuser_init_id = NULL;
-      superuser_notify_property (router, "Current");
+    router->superuser_rule = NULL;
 
-      if (!router->superuser_legacy_init)
-        {
-          GBytes *request = cockpit_transport_build_control ("command", "superuser-init-done",
-                                                             NULL);
-          cockpit_transport_send (router->transport, NULL, request);
-          g_bytes_unref (request);
-        }
+  router->superuser_init_in_progress = FALSE;
+  superuser_notify_property (router, "Current");
+
+  if (!router->superuser_legacy_init)
+    {
+      GBytes *request = cockpit_transport_build_control ("command", "superuser-init-done",
+                                                         NULL);
+      cockpit_transport_send (router->transport, NULL, request);
+      g_bytes_unref (request);
     }
 
   g_object_unref (router);
 }
 
 static void
-superuser_init_step (CockpitRouter *router)
+superuser_init_start (CockpitRouter *router,
+                      const gchar *id)
 {
-  for (GList *l = router->superuser_init_next_rule; l; l = g_list_next (l))
+  router->superuser_init_in_progress = TRUE;
+
+  for (GList *l = router->rules; l; l = g_list_next (l))
     {
       gchar *rule_id = rule_superuser_id (l->data);
-      if (rule_id && (router->superuser_init_id == NULL
-                      || g_str_equal (router->superuser_init_id, rule_id)))
+      if (rule_id && (id == NULL || g_str_equal (id, rule_id)))
         {
           router->superuser_rule = l->data;
-          router->superuser_init_next_rule = g_list_next (l);
           cockpit_peer_reset (router->superuser_rule->user_data);
           router->superuser_transport = cockpit_peer_ensure_with_done (router->superuser_rule->user_data,
-                                                                       superuser_init_step_done,
+                                                                       superuser_init_done,
                                                                        g_object_ref (router));
           g_signal_connect (router->superuser_transport, "closed",
                             G_CALLBACK (on_superuser_transport_closed), router);
@@ -1776,7 +1756,10 @@ superuser_init_step (CockpitRouter *router)
       g_free (rule_id);
     }
 
-  superuser_init_step_done (NULL, g_object_ref (router));
+  if (id)
+    g_warning ("No such superuser bridge: %s", id);
+
+  superuser_init_done (NULL, g_object_ref (router));
 }
 
 static void
